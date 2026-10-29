@@ -1,0 +1,173 @@
+import { resolveMacros } from '../vendor/upstream/macro-engine';
+// packages/client/src/lib/chat-macros.ts:13-91,161-252, copied without network/input helpers.
+export interface MacroCharacterData {
+  id?: string;
+  name: string;
+  description?: string;
+  personality?: string;
+  backstory?: string;
+  appearance?: string;
+  scenario?: string;
+  example?: string;
+  systemPrompt?: string;
+  postHistoryInstructions?: string;
+}
+
+export interface MacroPersonaData {
+  personaId?: string;
+  name: string;
+  description?: string;
+  personality?: string;
+  backstory?: string;
+  appearance?: string;
+  scenario?: string;
+}
+
+function getString(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function getRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
+export function getChatCharacterIds(chat: { characterIds?: unknown } | null | undefined): string[] {
+  if (!chat) return [];
+
+  const raw = chat.characterIds;
+  if (Array.isArray(raw)) {
+    return Array.from(new Set(raw.filter((value): value is string => typeof value === "string" && value.length > 0)));
+  }
+
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      return Array.isArray(parsed)
+        ? Array.from(new Set(parsed.filter((value): value is string => typeof value === "string" && value.length > 0)))
+        : [];
+    } catch {
+      return [];
+    }
+  }
+
+  return [];
+}
+
+export function parseCharacterMacroData(
+  raw: { id?: string; data: unknown } | null | undefined,
+): MacroCharacterData | null {
+  if (!raw) return null;
+
+  try {
+    const parsed = typeof raw.data === "string" ? JSON.parse(raw.data) : raw.data;
+    const data = getRecord(parsed);
+    if (!data) return { id: raw.id, name: "Unknown" };
+    const extensions = getRecord(data.extensions);
+    return {
+      id: raw.id,
+      name: getString(data.name) || "Unknown",
+      description: getString(data.description),
+      personality: getString(data.personality),
+      backstory: getString(extensions?.backstory),
+      appearance: getString(extensions?.appearance),
+      scenario: getString(data.scenario),
+      example: getString(data.mes_example),
+      systemPrompt: getString(data.system_prompt),
+      postHistoryInstructions: getString(data.post_history_instructions),
+    };
+  } catch {
+    return { id: raw.id, name: "Unknown" };
+  }
+}
+export function buildMessageMacroContext({
+  persona,
+  primaryCharacter,
+  characters = [],
+  userName,
+  variables = {},
+  lastInput,
+}: {
+  persona?: MacroPersonaData | null;
+  primaryCharacter?: MacroCharacterData | null;
+  characters?: MacroCharacterData[];
+  userName?: string;
+  variables?: Record<string, string>;
+  lastInput?: string;
+}): MacroContext {
+  const fallbackCharacter = primaryCharacter ?? characters[0] ?? null;
+
+  return {
+    user: userName ?? persona?.name ?? "User",
+    char: fallbackCharacter?.name ?? "Character",
+    characters: characters.map((character) => character.name).filter((name) => name.trim().length > 0),
+    variables,
+    lastInput,
+    characterFields: fallbackCharacter
+      ? {
+          description: fallbackCharacter.description ?? "",
+          personality: fallbackCharacter.personality ?? "",
+          backstory: fallbackCharacter.backstory ?? "",
+          appearance: fallbackCharacter.appearance ?? "",
+          scenario: fallbackCharacter.scenario ?? "",
+          example: fallbackCharacter.example ?? "",
+          systemPrompt: fallbackCharacter.systemPrompt ?? "",
+          postHistoryInstructions: fallbackCharacter.postHistoryInstructions ?? "",
+        }
+      : undefined,
+    personaFields: persona
+      ? {
+          description: persona.description ?? "",
+          personality: persona.personality ?? "",
+          backstory: persona.backstory ?? "",
+          appearance: persona.appearance ?? "",
+          scenario: persona.scenario ?? "",
+        }
+      : undefined,
+  };
+}
+
+export function resolveMessageMacros(
+  template: string,
+  context: Parameters<typeof buildMessageMacroContext>[0],
+  options?: { randomSeed?: string },
+): string {
+  return createMessageMacroResolver(context, options)(template);
+}
+
+/**
+ * Variable-op macros make resolution order-dependent (writes mutate the shared
+ * context; reads observe them), so templates containing them are never cached.
+ */
+const VARIABLE_OP_MACRO_RE = /\{\{\s*(?:setvar|addvar|addnumvar|incvar|decvar|getvar)\b/i;
+/** Macros that change a chat variable. Only the server saves a chat variable's new value. */
+export const VARIABLE_WRITE_MACRO_RE = /\{\{\s*(?:setvar|addvar|addnumvar|incvar|decvar)\b/i;
+/** Only short templates (regex replacements, trims, patterns) are worth caching. */
+const RESOLVER_CACHE_MAX_TEMPLATE_LENGTH = 2048;
+
+export function createMessageMacroResolver(
+  context: Parameters<typeof buildMessageMacroContext>[0],
+  options?: { randomSeed?: string },
+) {
+  const macroContext = buildMessageMacroContext(context);
+  // #3164: one resolver instance serves every regex-script replacement / trim /
+  // pattern string of a single display computation, and scripts frequently share
+  // the same replacement — with a fixed (context, seed), identical templates
+  // resolve identically, so repeats are served from a per-instance cache. The
+  // cache is disabled from the first variable-write onward: conditionals and the
+  // {{name}} catch-all can read variables without matching the var-op pattern,
+  // and a write in between would make a cached repeat stale.
+  const cache = new Map<string, string>();
+  let variablesTouched = false;
+  return (template: string) => {
+    const touchesVariables = VARIABLE_OP_MACRO_RE.test(template);
+    if (touchesVariables) variablesTouched = true;
+    const cacheable = !touchesVariables && !variablesTouched && template.length <= RESOLVER_CACHE_MAX_TEMPLATE_LENGTH;
+    if (cacheable) {
+      const cached = cache.get(template);
+      if (cached !== undefined) return cached;
+    }
+    const resolved = resolveMacros(template, macroContext, { trimResult: false, randomSeed: options?.randomSeed });
+    if (cacheable) cache.set(template, resolved);
+    return resolved;
+  };
+}

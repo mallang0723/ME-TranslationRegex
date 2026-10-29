@@ -1,0 +1,12 @@
+{
+  "client/src/hooks/use-apply-regex.ts": "c607efc21b45f6523112f22ef204371d05abb67b8454707d129a7c3b83fd9b58",
+  "client/src/lib/chat-macros.ts": "6b931182f8536ed40671adf0e28aff91728d415d3f928ab8635bf61f22259ff9",
+  "client/src/lib/chat-html.ts": "6650edf7a43dc26aec7b8abf35a5e9f13365c0a302ca8bd91848fa53d3a298c5",
+  "client/src/lib/chat-message-css.ts": "3301eaa702126b14561502bc83be6942379d075da23a3526319eef6030bc3902",
+  "shared/src/utils/regex-scoping.ts": "9a8f7311ed3cf1c2a9c747518d8ac56c6c1d2a606eac646e3a1bb93eff9f85eb",
+  "shared/src/utils/regex-replacement.ts": "367dca99dac666aa6868d8268b355cbd7cf00e780db5804c1a11ac1b76da30ec",
+  "shared/src/utils/regex-safety.ts": "99eb9ece232df05ab6765468f4965fd6b1054924c5a36894978e3b76e1d56db1",
+  "shared/src/utils/macro-engine.ts": "4c6269334bf760d2a9ab9da245d1f53b3b780942691dc716d047309aa469753f",
+  "shared/src/utils/preset-choices.ts": "f56acdf0993e44b7ec9ec9ffb6a80f63dc253c6816e188fc8b4b631c2a2d61d8",
+  "shared/src/utils/quote-format.ts": "27593f59389bcadc2af8832c11c5bfdb1163b4f96b45dfcea5ee892602bc685b"
+}

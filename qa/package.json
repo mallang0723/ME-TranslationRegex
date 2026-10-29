@@ -1,0 +1,11 @@
+{
+  "file": "translation_regex_me.personal-extension.zip",
+  "bytes": 98693,
+  "sha256": "6618bec9d623694f202825012fc3fcee348139365ab779428ea1bc9eb12dbee4",
+  "files": {
+    "manifest.json": "73088da931c1ba11b03e90541923939ebfaf0f2d381031e2e05995f92e722b07",
+    "extension.js": "5c26270469df9018d230c352146138c6043f5e4c5379bbf07aa2cffd52b94ec5",
+    "README.md": "cc638f77d7ccad863192c8a8e8eea847785324725f3dadf878bdef8572dcfd4e",
+    "NOTICE": "b4077ddcc4bbeb60e51492e07478994352d1bcd1bc28e8cf3628d23a5fc61ffc"
+  }
+}

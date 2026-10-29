@@ -1,0 +1,12 @@
+{
+  "version": "0.2.0",
+  "zip": "passed",
+  "entries": 4,
+  "crc": "passed",
+  "distBytesMatch": true,
+  "bytes": 98637,
+  "sha256": "dda8f5094c77379a6733a4987612d4274ba853ae1eb87ef004a0f220a0ea96fb",
+  "tests": 90,
+  "referenceHashesUnchanged": true,
+  "browserLayout": "blocked before page creation"
+}
