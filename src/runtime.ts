@@ -4,6 +4,8 @@ import { formatTextQuotes } from '../vendor/upstream/quote-format';
 import { createSanitizer } from './sanitize';
 import { createData, activeChatId, record, quoteFormat } from './data';
 import { createActions } from './actions';
+import { createLauncher } from './launcher';
+import { createTranslationJobs, sourceMatches, truncation } from './translation';
 export const KEY = 'translation_regex_me';
 const BASE_CSS = `:host{display:block;min-width:0;max-width:100%;contain:layout style paint;isolation:isolate}
 .translation-content{position:relative;max-width:100%;overflow:auto;overflow-wrap:anywhere;white-space:pre-wrap}
@@ -18,40 +20,96 @@ export function start(api: any, window: any) {
   const mounted = new Map<any, any>();
   const life = new window.AbortController();
   const choices = new Map<string, boolean>(), intents = new Map<string, boolean>(), requested = new Set<string>();
-  const settings = { enabled: false, conversation: false };
+  const settings = { enabled: false, conversation: false, autoContinue: false, showLauncher: true };
+  const savedTranslations = new Map<string, string>();
   try { const saved = JSON.parse(window.localStorage.getItem(`${KEY}.settings`) || '{}');
-    settings.enabled = saved.autoApply === true; settings.conversation = saved.conversation === true;
+    settings.enabled = saved.autoApply === true; settings.conversation = saved.conversation === true; settings.autoContinue = saved.autoContinue === true;
+    settings.showLauncher = saved.showLauncher !== false;
   } catch {}
   const el = (tag: string, text?: string) => { const n = document.createElement(tag); if (text) n.textContent = text; return n; };
-  const ui = el('div'); ui.id = KEY;
+  const ui = el('div'); ui.id = KEY; ui.hidden = true;
   const shadow = ui.attachShadow({ mode: 'open' }), style = el('style');
   // Pattern reused from gacha-minigames-fork/anywhere/src/mount.js: shadow settings + cleanup.
-  style.textContent = `:host{position:fixed;right:12px;bottom:12px;z-index:1000;font:14px/1.5 system-ui;color:#eee;max-width:calc(100vw - 24px)}
+  style.textContent = `:host{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;padding:12px;background:#0006;font:14px/1.5 system-ui;color:#eee}:host([hidden]){display:none!important}
 *{box-sizing:border-box}button{font:inherit;color:inherit;background:#303444;border:1px solid #6c7185;border-radius:8px;padding:8px 12px;cursor:pointer}
-section{background:#222633;border:1px solid #6c7185;border-radius:12px;padding:12px;width:300px;max-width:calc(100vw - 24px);max-height:70vh;overflow:auto;margin-bottom:8px;overflow-wrap:anywhere}
-[hidden]{display:none!important}label{display:flex;align-items:flex-start;gap:8px;margin:12px 0}input{flex:none;width:18px;height:18px}p{font-size:12px;margin:8px 0}h2{font-size:15px;margin:0 0 10px}`;
+section{display:flex;flex-direction:column;background:#222633;border:1px solid #6c7185;border-radius:12px;padding:12px;width:320px;max-width:calc(100vw - 24px);max-height:70vh;max-height:min(70dvh,calc(100dvh - 96px));overflow:hidden;overflow-wrap:anywhere}
+header{display:flex;align-items:center;justify-content:space-between;gap:8px;flex:none}header button{min-width:44px;min-height:44px;flex:none}.settings-body{overflow:auto;min-height:0}
+[hidden]{display:none!important}label{display:flex;align-items:flex-start;gap:8px;margin:12px 0}input{flex:none;width:18px;height:18px}p{font-size:12px;margin:8px 0}h2{font-size:15px;margin:0}`;
   const panel = el('section'); panel.hidden = true; panel.id = 'settings'; panel.setAttribute('aria-label', '번역문 정규식 설정');
-  const toggle = el('button', '번역 정규식'); toggle.type = 'button'; toggle.setAttribute('aria-expanded', 'false'); toggle.setAttribute('aria-controls', 'settings');
+  panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-modal', 'true');
   const close = el('button', '닫기'); close.type = 'button';
   const status = el('p', '수동 실행 · 메시지의 점선 큐브 버튼을 누르세요'); status.setAttribute('role', 'status');
-  panel.append(el('h2', '번역문 표시 정규식'));
-  const inputs: any = {};
-  for (const [key, title] of [['enabled', '번역문에 자동 적용 (기본 꺼짐)'], ['conversation', '대화 모드에도 적용 (원문 번역만)']]) {
-    const label = el('label'), input = el('input'); input.type = 'checkbox'; input.checked = settings[key]; input.id = key; inputs[key] = input;
+  const header = el('header'), content = el('div'); content.className = 'settings-body';
+  header.append(el('h2', '번역문 표시 정규식'), close); panel.append(header, content);
+  for (const [key, title] of [['enabled', '번역문에 자동 적용 (기본 꺼짐)'], ['conversation', '대화 모드에도 적용 (원문 번역만)'], ['autoContinue', '번역이 끊겼으면 자동으로 이어서 (기본 꺼짐)'], ['showLauncher', '플로팅 런처 표시']]) {
+    const label = el('label'), input = el('input'); input.type = 'checkbox'; input.checked = settings[key]; input.id = key;
     input.addEventListener('change', () => {
       settings[key] = input.checked;
-      try { window.localStorage.setItem(`${KEY}.settings`, JSON.stringify({ autoApply: settings.enabled, conversation: settings.conversation })); } catch {}
+      try { window.localStorage.setItem(`${KEY}.settings`, JSON.stringify({ autoApply: settings.enabled, conversation: settings.conversation, autoContinue: settings.autoContinue, showLauncher: settings.showLauncher })); } catch {}
+      if (key === 'showLauncher') { launcher.setShown(settings.showLauncher); return; }
       choices.clear(); intents.clear(); requested.clear(); invalidate(true);
-    }, { signal: life.signal }); label.append(input, el('span', title)); panel.append(label);
+    }, { signal: life.signal }); label.append(input, el('span', title)); content.append(label);
   }
-  panel.append(el('p', '대화 모드에서 이미 가공한 HTML을 번역한 경우에는 중복 적용을 피하기 위해 원래 번역문을 표시합니다.'));
+  content.append(el('p', '대화 모드에서 이미 가공한 HTML을 번역한 경우에는 중복 적용을 피하기 위해 원래 번역문을 표시합니다.'));
   const refresh = el('button', '규칙 새로고침'); refresh.type = 'button';
   refresh.addEventListener('click', () => invalidate(true), { signal: life.signal });
-  panel.append(refresh, status, close); shadow.append(style, panel, toggle); document.body.append(ui);
-  function closePanel() { panel.hidden = true; toggle.setAttribute('aria-expanded', 'false'); toggle.focus(); }
-  toggle.addEventListener('click', () => { panel.hidden = !panel.hidden; toggle.setAttribute('aria-expanded', String(!panel.hidden)); if (!panel.hidden) inputs.enabled.focus(); }, { signal: life.signal });
+  const translationMenu = el('div'), jobStatus = el('p'), partialHelp = el('p', '부분 결과 저장은 기존 번역을 완료된 청크까지의 번역으로 바꿉니다.'); partialHelp.hidden = true; jobStatus.setAttribute('role', 'status');
+  const resume = el('button', '이어서 번역'), split = el('button', '나눠서 다시 번역');
+  const cancel = el('button', '취소'), keep = el('button', '부분 결과 저장'), discard = el('button', '부분 결과 버리기');
+  resume.id = 'continue-translation'; split.id = 'split-translation'; cancel.id = 'cancel-translation';
+  keep.id = 'save-partial'; discard.id = 'discard-partial';
+  cancel.hidden = keep.hidden = discard.hidden = true;
+  translationMenu.append(resume, split, cancel, keep, discard, partialHelp, jobStatus);
+  content.append(status, translationMenu, refresh); shadow.append(style, panel); document.body.append(ui);
+  let opener: any, panelChatId: string | null;
+  const launcher = createLauncher(window, button => { if (ui.hidden) openPanel(button); else closePanel(); }, settings.showLauncher);
+  function openPanel(button: any) {
+    opener = button; panelChatId = activeChatId(window); ui.hidden = false; panel.hidden = false;
+    translationMenu.hidden = !button?.closest('[data-message-id]'); launcher.button.setAttribute('aria-expanded', 'true');
+    close.focus({ preventScroll: true });
+  }
+  function closePanel() { ui.hidden = true; panel.hidden = true; launcher.button.setAttribute('aria-expanded', 'false'); if (opener?.isConnected) opener.focus({ preventScroll: true }); opener = undefined; }
   close.addEventListener('click', closePanel, { signal: life.signal });
-  panel.addEventListener('keydown', (e: any) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closePanel(); } }, { signal: life.signal });
+  ui.addEventListener('click', (e: any) => { e.stopPropagation(); if (e.composedPath()[0] === ui) closePanel(); }, { signal: life.signal });
+  for (const type of ['pointerdown', 'touchstart', 'contextmenu']) ui.addEventListener(type, (e: any) => e.stopPropagation(), { signal: life.signal });
+  document.addEventListener('keydown', (e: any) => {
+    if (ui.hidden) return;
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closePanel(); }
+    if (e.key === 'Tab') {
+      const controls = [...panel.querySelectorAll('button,input')].filter((n: any) => !n.closest('[hidden]') && !n.disabled), index = controls.indexOf(shadow.activeElement);
+      if (index === -1 || (!e.shiftKey && index === controls.length - 1) || (e.shiftKey && index === 0)) {
+        e.preventDefault(); controls[e.shiftKey ? controls.length - 1 : 0].focus();
+      }
+    }
+  }, { capture: true, signal: life.signal });
+  document.addEventListener('focusin', (e: any) => {
+    if (!ui.hidden && !e.composedPath().includes(ui)) close.focus({ preventScroll: true });
+  }, { signal: life.signal });
+
+  const jobs = createTranslationJobs(api, window, (state: any) => {
+    if (state.text !== undefined) jobStatus.textContent = state.text;
+    partialHelp.hidden = !state.partial; cancel.hidden = !state.busy; keep.hidden = discard.hidden = !state.partial;
+    resume.disabled = split.disabled = state.busy || state.partial;
+    keep.disabled = discard.disabled = state.busy;
+    if (state.messageId) actions.state(state.messageId, state.busy ? 'busy' : 'idle', state.text || jobStatus.textContent);
+  }, (job: any, text: string) => {
+    savedTranslations.set(job.messageId, text);
+    intents.set(job.messageId, true); requested.add(job.messageId); invalidate(true);
+    // Host query cache refresh seeds translation.store from the newly persisted extras.
+    try {
+      Promise.resolve(window.__MARINARA_HOST__?.queryClient?.invalidateQueries?.({ queryKey: ['chats', 'messages', job.chatId] })).catch(() => {});
+    } catch {}
+  });
+  for (const [button, mode] of [[resume, 'continue'], [split, 'split']] as const) {
+    button.type = 'button'; button.addEventListener('click', () => {
+      const id = opener?.closest('[data-message-id]')?.getAttribute('data-message-id');
+      if (id && panelChatId === activeChatId(window)) void jobs.execute(id, mode);
+      else jobStatus.textContent = '채팅이 변경되었습니다 · 현재 메시지의 큐브 메뉴를 다시 여세요';
+    }, { signal: life.signal });
+  }
+  cancel.addEventListener('click', () => jobs.cancel(), { signal: life.signal });
+  keep.addEventListener('click', () => { void jobs.savePartial(); }, { signal: life.signal });
+  discard.addEventListener('click', () => jobs.discard(), { signal: life.signal });
 
   const actions = createActions(window, (messageId: string) => {
     const wanted = actions.kind(messageId) === 'error' || !requested.has(messageId);
@@ -59,7 +117,7 @@ section{background:#222633;border:1px solid #6c7185;border-radius:12px;padding:1
     if (wanted) requested.add(messageId); else requested.delete(messageId);
     invalidate(true);
     actions.state(messageId, wanted ? 'busy' : 'idle', wanted ? '적용 중' : '원래 번역문 표시');
-  });
+  }, openPanel);
   function observe() { if (!disposed) observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true,
     attributeFilter: ['class', 'style', 'hidden', 'data-message-id'] }); }
   function quiet(fn: () => void) { observer.disconnect(); try { fn(); } finally { observe(); } }
@@ -85,12 +143,21 @@ section{background:#222633;border:1px solid #6c7185;border-radius:12px;padding:1
   function relevant(m: any) {
     const target = m.target.nodeType === 1 ? m.target : m.target.parentElement;
     if (target?.closest?.(`[data-${KEY}],[data-translation-regex-action],#${KEY}`)) return false;
+    // Polisher owns its controls and sometimes marks a translation node too: ignore UI
+    // mutations, but still watch its translation text (polisher applyVisible behavior).
+    if (target?.closest?.('[data-translation-polisher-ui]') && !target.closest('.translation-text,.mari-message-content')) return false;
+    const node = target?.closest?.('.translation-text,.mari-message-content');
+    const old = mounted.get(node);
+    if (old && fingerprint(node) === old.fingerprint && node.nextSibling === old.wrapper &&
+      node.style.getPropertyValue('display') === 'none') return false;
     if (target?.closest?.('[data-message-id],.translation-text')) return true;
     return [...(m.addedNodes || []), ...(m.removedNodes || [])].some((n: any) => n.nodeType === 1 &&
       (n.matches?.('.translation-text,[data-message-id]') || n.querySelector?.('.translation-text,[data-message-id]')));
   }
   const observer = new window.MutationObserver((records: any[]) => {
-    if (records.some(relevant) || [...mounted].some(([n, s]) => !n.isConnected || !s.wrapper.isConnected)) invalidate();
+    if (records.some(relevant) || [...mounted].some(([n, s]) => !n.isConnected || !s.wrapper.isConnected)) {
+      epoch++; data.invalidate(); schedule();
+    }
   });
   function connect() {
     const host = window.__MARINARA_HOST__;
@@ -120,17 +187,18 @@ section{background:#222633;border:1px solid #6c7185;border-radius:12px;padding:1
     running = true;
     let version = epoch;
     try {
-      connect();
+      connect(); jobs.navigation();
       const id = activeChatId(window);
-      if (id !== currentId) { currentId = id; choices.clear(); intents.clear(); requested.clear(); epoch++; data.invalidate(true); restoreAll(); }
+      if (id !== currentId) { currentId = id; savedTranslations.clear(); choices.clear(); intents.clear(); requested.clear(); epoch++; data.invalidate(true); restoreAll(); }
       quiet(() => {
         for (const [node, state] of mounted) if (!node.isConnected || !state.wrapper.isConnected) release(node);
         actions.sync();
       });
       if (!id) { restoreAll(); status.textContent = '활성 채팅 없음'; return; }
+      if (jobs.busy) return;
       const roots = [...document.querySelectorAll('[data-message-id]')] as any[];
       if (!roots.length) { restoreAll(); status.textContent = '표시된 메시지 없음'; return; }
-      if (!settings.enabled && !requested.size && !intents.size && ![...choices.values()].some(Boolean)) {
+      if (!settings.enabled && !settings.autoContinue && !requested.size && !intents.size && ![...choices.values()].some(Boolean)) {
         restoreAll();
         for (const mid of actions.ids()) actions.state(mid, 'idle');
         status.textContent = '수동 실행 · 메시지의 점선 큐브 버튼을 누르세요'; return;
@@ -139,7 +207,7 @@ section{background:#222633;border:1px solid #6c7185;border-radius:12px;padding:1
       const candidates = roots.flatMap(root => [...root.querySelectorAll('.translation-text,.mari-message-content')])
         .filter((node: any) => !node.hasAttribute(`data-${KEY}`));
       const stamps = new Map(candidates.map((node: any) => [node, fingerprint(node)]));
-      for (const mid of requested) actions.state(mid, 'busy', '적용 중');
+      if (!jobs.busy) for (const mid of requested) actions.state(mid, 'busy', '적용 중');
       const state = store?.getState?.();
       if (state?.isStreaming && (!state.streamingChatId || state.streamingChatId === id)) { restoreAll(); for (const mid of actions.ids()) actions.state(mid, 'busy', '생성 중 · 완료 후 확인'); status.textContent = '생성 중 · 원래 번역문 표시'; return; }
       // Without the optional host store, use the same-origin status endpoint used by the precedent extension.
@@ -151,6 +219,7 @@ section{background:#222633;border:1px solid #6c7185;border-radius:12px;padding:1
       }
       const snapshot = await data.snapshot(id);
       if (!current(version, id)) return;
+      if (jobs.busy) return;
       const { chat, messages, rules, presets } = snapshot;
       if (chat.mode !== 'roleplay' && !(chat.mode === 'conversation' && settings.conversation)) {
         restoreAll(); for (const mid of actions.ids()) actions.state(mid, 'idle', '이 채팅 모드는 설정에서 허용해야 합니다'); status.textContent = '이 채팅 모드에서는 원래 번역문 표시'; return;
@@ -168,6 +237,12 @@ section{background:#222633;border:1px solid #6c7185;border-radius:12px;padding:1
         if (!message || message.role !== 'assistant') { skip('현재 AI 메시지를 API에서 확인할 수 없음'); continue; }
         const key = `${id}:${message.id}:${message.activeSwipeIndex ?? 0}`;
         if (intents.has(messageId)) { choices.set(key, intents.get(messageId)!); intents.delete(messageId); }
+        const messageExtra = record(message.extra);
+        if (settings.autoContinue && !messageExtra.translationHidden && sourceMatches(message) &&
+          typeof messageExtra.translation === 'string' && truncation(message.content, messageExtra.translation).suspected && jobs.canAuto(id, message)) {
+          void jobs.execute(messageId, 'continue', true); return;
+        }
+        if (jobs.busy) continue;
         const wanted = choices.get(key) ?? settings.enabled;
         if (wanted) requested.add(messageId); else requested.delete(messageId);
         if (!wanted) { actions.state(messageId, 'idle'); continue; }
@@ -175,16 +250,16 @@ section{background:#222633;border:1px solid #6c7185;border-radius:12px;padding:1
         const extra = record(swipe.extra), raw = extra.translation;
         if (typeof raw !== 'string' || !raw) { skip('API에 저장된 번역문 없음 · 다음 확인 때 재시도'); continue; }
         if (extra.translationHidden === true) { skip('숨긴 번역문 · 원래 표시 유지'); continue; }
-        if (chat.mode === 'roleplay' && typeof extra.translationSource === 'string' && extra.translationSource !== message.content) {
+        if (chat.mode === 'roleplay' && typeof extra.translationSource === 'string' && !sourceMatches(message, extra)) {
           skip('현재 스와이프와 번역 원문 불일치'); continue;
         }
         // ConversationMessage.tsx:396-405,765 translates renderedContent (already processed).
-        if (chat.mode === 'conversation' && extra.translationSource !== message.content) { skip('가공된 HTML 또는 출처 미확인 번역 · 중복 적용 방지'); continue; }
+        if (chat.mode === 'conversation' && !sourceMatches(message, extra)) { skip('가공된 HTML 또는 출처 미확인 번역 · 중복 적용 방지'); continue; }
         const separate = [...root.querySelectorAll('.translation-text')].filter((n: any) => n.closest('[data-message-id]') === root);
         // ChatMessage.tsx:3329-3345,3516-3546: translationDisplayOnly replaces prose
         // inside mari-message-content and OMITs translation-text. API must be read BEFORE DOM selection.
         // ConversationMessage.tsx:455-461 also replaces prose; the raw-source guard above still applies.
-        const inline = record(chat.metadata).translationDisplayOnly === true && extra.translationSource === message.content;
+        const inline = record(chat.metadata).translationDisplayOnly === true && sourceMatches(message, extra);
         const nodes = separate.length ? separate : inline ? [...root.querySelectorAll('.mari-message-content')]
           .filter((n: any) => !n.hasAttribute(`data-${KEY}`) && n.closest('[data-message-id]') === root) : [];
         // A whole API translation must never replace multiple paragraphs/segments or an editor.
@@ -201,6 +276,7 @@ section{background:#222633;border:1px solid #6c7185;border-radius:12px;padding:1
         if (!separate.length && node.querySelector('button,input,select,video,audio')) {
           skip('상호작용 본문 · 원래 표시 유지'); continue;
         }
+        if (node.querySelector('[data-translation-polisher-ui]')) { skip('다듬기 UI가 포함된 번역 영역 · 원래 표시 유지'); continue; }
         if (!stamps.has(node)) { skip('화면 변경 중 · 다음 확인 때 재시도'); continue; }
         validNodes.add(node);
         const resolve = /\{\{/.test(raw + rules.map((r: any) => `${r.findRegex}${r.replaceString}${r.trimStrings}`).join(''))
@@ -214,7 +290,7 @@ section{background:#222633;border:1px solid #6c7185;border-radius:12px;padding:1
           characterId: message.characterId, promptPresetId: chat.promptPresetId,
         }), quoteFormat(window)));
         if (!current(version, id) || !node.isConnected || fingerprint(node) !== stamps.get(node)) continue;
-        if (output === raw) { quiet(() => release(node)); skip('적용할 규칙 없음 · 원래 번역문 표시'); continue; }
+        if (output === raw && savedTranslations.get(messageId) !== raw) { quiet(() => release(node)); skip('적용할 규칙 없음 · 원래 번역문 표시'); continue; }
         const signature = JSON.stringify([id, message.id, message.activeSwipeIndex ?? 0, raw, output, stamps.get(node)]);
         if (mounted.get(node)?.signature === signature && node.nextSibling === mounted.get(node).wrapper) { count++; actions.state(messageId, 'applied', '적용됨 · 다시 누르면 원래 번역문'); continue; }
         const clean = sanitize(output);
@@ -226,7 +302,7 @@ section{background:#222633;border:1px solid #6c7185;border-radius:12px;padding:1
           release(node);
           const old = { display: node.style.getPropertyValue('display'), priority: node.style.getPropertyPriority('display'), hadStyle: node.hasAttribute('style') };
           // Commit only after all fallible work succeeds. React-owned children remain untouched.
-          node.after(wrapper); mounted.set(node, { ...old, wrapper, signature }); node.style.setProperty('display', 'none', 'important');
+          node.after(wrapper); mounted.set(node, { ...old, wrapper, signature, fingerprint: fingerprint(node) }); node.style.setProperty('display', 'none', 'important');
         });
         count++; actions.state(messageId, 'applied', '적용됨 · 다시 누르면 원래 번역문');
       }
@@ -242,9 +318,9 @@ section{background:#222633;border:1px solid #6c7185;border-radius:12px;padding:1
   function dispose() {
     if (disposed) return;
     disposed = true; epoch++; observer.disconnect();
-    window.clearTimeout(timer); window.clearInterval(interval); life.abort(); offStore?.(); offQuery?.(); data.dispose();
+    window.clearTimeout(timer); window.clearInterval(interval); life.abort(); jobs.dispose(); offStore?.(); offQuery?.(); data.dispose();
     for (const node of mounted.keys()) release(node);
-    actions.dispose(); choices.clear(); intents.clear(); requested.clear(); ui.remove(); if (window[KEY]?.dispose === dispose) delete window[KEY];
+    launcher.dispose(); actions.dispose(); choices.clear(); intents.clear(); requested.clear(); ui.remove(); if (window[KEY]?.dispose === dispose) delete window[KEY];
   }
   const instance = { dispose, refresh: () => invalidate(true) };
   window[KEY] = instance; api.onCleanup(dispose); observe();

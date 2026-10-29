@@ -20,7 +20,7 @@ test('script/on*/SVG/data attributes removed, style scoped, all remote resources
   assert.equal(h.body.querySelector('[data-spk]').getAttribute('data-spk'), 'a');
   assert.equal(h.body.querySelector('a[href]'), null); assert.ok(h.body.textContent.includes('표지'));
   assert.ok(!h.wrapper.shadowRoot.querySelector('style').textContent.includes('outside.invalid'));
-  assert.equal(h.w.document.head.querySelector('style:not([data-translation-regex-action])'), null);
+  assert.equal(h.w.document.head.querySelector('style:not([data-translation-regex-action]):not([data-translation-regex-launcher-style])'), null);
   assert.match(h.wrapper.shadowRoot.querySelector('style').textContent, /\.translation-content\{color:red\}/);
 });
 test('rerender node replacement removes orphan and mounts on new original', async t => {
@@ -171,16 +171,95 @@ test('0.2 regression: translation-only completion exits waiting on the next 2s p
 });
 
 const actionHTML = (content = '<div class="translation-text"><p>체력 90</p></div>') => `<main class="mari-message-assistant" data-message-id="m">${content}<div class="mari-message-actions opacity-100"><button title="복사"><svg></svg></button><button title="번역">번역</button></div></main>`;
-const action = h => h.w.document.querySelector('[data-translation-regex-action] button');
+const action = h => h.w.document.querySelector('button[data-translation-regex-action]');
 
-test('0.2 fresh install and legacy enabled setting default to manual, one dashed cube is a row sibling', async t => {
+function touchEvent(h, button, type, points = [{ identifier: 1, clientX: 20, clientY: 20 }]) {
+  const event = new h.w.Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperty(event, 'touches', { value: points });
+  button.dispatchEvent(event); return event;
+}
+test('message cube short touch only toggles and consumes the compatibility click', async t => {
+  const h = await withHost(t, { settings: null, html: actionHTML() }), button = action(h);
+  assert.equal([...h.ui.querySelectorAll('button')].some(b => b.textContent === '번역 정규식'), false);
+  assert.equal(h.ui.host.hidden, true);
+  const bubbled = [];
+  for (const type of ['touchstart', 'touchend', 'click', 'contextmenu', 'selectstart', 'pointerdown'])
+    button.closest('main').addEventListener(type, () => bubbled.push(type));
+  button.dispatchEvent(new h.w.Event('pointerdown', { bubbles: true }));
+  assert.equal(touchEvent(h, button, 'touchstart').defaultPrevented, true);
+  const select = new h.w.Event('selectstart', { bubbles: true, cancelable: true }); button.dispatchEvent(select);
+  assert.equal(select.defaultPrevented, true);
+  touchEvent(h, button, 'touchend', []); button.click(); await h.settle();
+  assert.ok(h.wrapper); assert.equal(h.ui.host.hidden, true); assert.deepEqual(bubbled, []);
+  touchEvent(h, button, 'touchstart'); touchEvent(h, button, 'touchend', []); button.click(); await h.settle();
+  assert.equal(h.wrapper, null); assert.equal(h.ui.host.hidden, true);
+});
+test('0.2.1 touch hold opens at 600ms, consumes early context menu and release without toggling', async t => {
+  const h = await withHost(t, { settings: null, html: actionHTML() }), button = action(h);
+  const nativeTimeout = h.w.setTimeout;
+  let fire;
+  h.w.setTimeout = (fn, ms) => {
+    if (ms === 600) { const id = nativeTimeout(() => {}, 10000); fire = () => { h.w.clearTimeout(id); fn(); }; return id; }
+    return nativeTimeout(fn, ms);
+  };
+  let menus = 0; button.closest('main').addEventListener('contextmenu', () => menus++);
+  touchEvent(h, button, 'touchstart');
+  const event = new h.w.MouseEvent('contextmenu', { bubbles: true, cancelable: true }); button.dispatchEvent(event);
+  assert.equal(event.defaultPrevented, true); assert.equal(menus, 0); assert.equal(h.ui.host.hidden, true);
+  assert.equal(typeof fire, 'function'); fire();
+  assert.equal(h.ui.host.hidden, false); assert.equal(h.ui.querySelector('section').hidden, false);
+  touchEvent(h, button, 'touchend', []); button.click(); await h.settle();
+  assert.equal(h.wrapper, null); assert.equal(h.requests.length, 0);
+  h.ui.querySelector('header button').click();
+  assert.equal(h.ui.host.hidden, true); assert.equal(h.w.document.activeElement, button);
+  // A hold must not swallow the next keyboard activation.
+  button.dispatchEvent(new h.w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  button.click(); await h.settle(); assert.ok(h.wrapper);
+});
+test('0.2.1 right click opens modal; inside click, focus trap, Escape, backdrop and close work', async t => {
+  const h = await withHost(t, { settings: { autoApply: false, conversation: true }, html: actionHTML() }), button = action(h);
+  const saved = h.w.localStorage.getItem('translation_regex_me.settings');
+  const open = () => button.dispatchEvent(new h.w.MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+  assert.equal(open(), false); assert.equal(h.ui.host.hidden, false); assert.equal(h.requests.length, 0);
+  h.ui.querySelector('h2').click(); assert.equal(h.ui.host.hidden, false);
+  const close = h.ui.querySelector('header button'), last = [...h.ui.querySelectorAll('.settings-body button')].at(-1);
+  assert.equal(h.ui.activeElement, close);
+  close.dispatchEvent(new h.w.KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, composed: true, cancelable: true }));
+  assert.equal(h.ui.activeElement, last);
+  last.dispatchEvent(new h.w.KeyboardEvent('keydown', { key: 'Tab', bubbles: true, composed: true, cancelable: true }));
+  assert.equal(h.ui.activeElement, close);
+  h.w.document.dispatchEvent(new h.w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  assert.equal(h.ui.host.hidden, true); assert.equal(h.w.document.activeElement, button);
+  open(); h.ui.host.click(); assert.equal(h.ui.host.hidden, true);
+  open(); close.click(); assert.equal(h.ui.host.hidden, true);
+  assert.equal(h.w.localStorage.getItem('translation_regex_me.settings'), saved);
+  assert.equal(h.ui.querySelector('#conversation').checked, true);
+});
+test('0.2.1 movement, cancellation, multiple fingers, row removal and cleanup cancel pending holds', async t => {
+  for (const cancel of ['move', 'touchcancel', 'pointercancel', 'multi', 'remove', 'cleanup']) {
+    const h = await withHost(t, { settings: null, html: actionHTML() }), button = action(h);
+    touchEvent(h, button, 'touchstart');
+    if (cancel === 'move') touchEvent(h, button, 'touchmove', [{ identifier: 1, clientX: 50, clientY: 20 }]);
+    else if (cancel === 'multi') touchEvent(h, button, 'touchstart', [{ identifier: 1 }, { identifier: 2 }]);
+    else if (cancel === 'remove') { h.w.document.querySelector('.mari-message-actions').remove(); await h.refresh(); }
+    else if (cancel === 'cleanup') h.stop();
+    else touchEvent(h, button, cancel, []);
+    await delay(630);
+    assert.ok(!h.ui || h.ui.host.hidden, cancel);
+    touchEvent(h, button, 'touchend', []); button.click(); await h.settle();
+    assert.ok(!h.ui || h.ui.host.hidden, cancel); assert.equal(h.wrapper, null, cancel);
+    if (cancel === 'cleanup') { assert.equal(h.timers.size, 0); assert.equal(h.intervals.size, 0); }
+  }
+});
+
+test('0.2 fresh install and legacy enabled setting default to manual, one dashed cube is the last row child', async t => {
   for (const settings of [null, { enabled: true }]) {
     const h = await withHost(t, { settings, html: actionHTML() });
     assert.equal(h.wrapper, null); assert.equal(h.requests.length, 0);
     assert.equal(h.ui.querySelector('#enabled').checked, false);
     const row = h.w.document.querySelector('.mari-message-actions');
-    assert.equal(row.children.length, 2); assert.equal(row.nextSibling, action(h).parentElement);
-    assert.equal(action(h).title, '번역문에 표시 정규식 적용');
+    assert.equal(row.children.length, 3); assert.equal(row.lastElementChild, action(h));
+    assert.match(action(h).title, /번역문에 표시 정규식 적용.*길게 눌러 설정/);
     assert.equal(action(h).querySelector('svg').getAttribute('stroke'), 'currentColor');
     assert.ok(action(h).querySelector('svg').hasAttribute('stroke-dasharray'));
     action(h).click(); await h.settle(); assert.ok(h.wrapper);
@@ -213,9 +292,9 @@ test('0.2 action reattaches after React row/sibling replacement and cleanup leav
   const h = await withHost(t, { settings: null, html: actionHTML() });
   action(h).click(); await h.settle();
   let row = h.w.document.querySelector('.mari-message-actions'); row.replaceWith(row.cloneNode(true)); await h.settle();
-  assert.equal(h.w.document.querySelectorAll('[data-translation-regex-action] button').length, 1);
+  assert.equal(h.w.document.querySelectorAll('button[data-translation-regex-action]').length, 1);
   assert.equal(action(h).getAttribute('aria-pressed'), 'true');
-  action(h).parentElement.remove(); await h.settle(); assert.ok(action(h));
+  action(h).remove(); await h.settle(); assert.ok(action(h));
   const count = h.requests.length; await h.settle(); assert.equal(h.requests.length, count);
   row = h.w.document.querySelector('.mari-message-actions'); h.stop();
   assert.equal(row.children.length, 2); assert.equal(row.hasAttribute('data-translation-regex-row'), false);
@@ -292,13 +371,14 @@ test('0.2 manual mode recovers from a missing API translation on periodic pollin
   h.fixture.messages[0] = message(); await delay(2100);
   assert.ok(h.wrapper); assert.equal(action(h).getAttribute('aria-pressed'), 'true');
 });
-test('0.2 action CSS reserves a 44px sibling slot and matches host theme (layout verification is separate)', async t => {
+test('0.2 action follows host button classes without reserved sibling space (layout verification is separate)', async t => {
   const h = await withHost(t, { settings: null, html: actionHTML() });
   const css = h.w.document.querySelector('style[data-translation-regex-action]').textContent;
-  assert.match(css, /padding-inline-end:48px!important;flex-wrap:nowrap!important/);
-  assert.match(css, /width:44px;height:44px;min-width:44px/);
-  assert.match(css, /--marinara-chat-message-action-bg-hover/);
-  assert.match(css, /--marinara-chat-message-action-text-hover/);
+  assert.doesNotMatch(css, /padding-inline-end|margin-block-start|48px|44px/);
+  assert.match(action(h).className, /h-9 w-9/);
+  assert.match(action(h).className, /max-md:h-8 max-md:w-7/);
+  assert.match(action(h).className, /--marinara-chat-message-action-bg-hover/);
+  assert.match(action(h).className, /--marinara-chat-message-action-text-hover/);
 });
 test('0.2 inline retranslation progress does not mistake original prose for the cached translation', async t => {
   const h = await withHost(t, { html: actionHTML('<div class="mari-message-content">original</div><div class="mt-2 border-t pt-2"><span>번역 중</span></div>'),

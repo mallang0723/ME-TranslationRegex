@@ -1,12 +1,14 @@
 {
-  "version": "0.2.0",
+  "version": "0.3.1",
   "zip": "passed",
   "entries": 4,
   "crc": "passed",
   "distBytesMatch": true,
-  "bytes": 98637,
-  "sha256": "dda8f5094c77379a6733a4987612d4274ba853ae1eb87ef004a0f220a0ea96fb",
-  "tests": 90,
+  "rootInstallBytesMatch": true,
+  "bytes": 108624,
+  "sha256": "780324e571c7e2a6e912023d4a5667d4c033b77a790d6a8eb997c471c62c8c7c",
+  "tests": 120,
   "referenceHashesUnchanged": true,
-  "browserLayout": "blocked before page creation"
+  "localAbsolutePathsInArtifacts": false,
+  "browserLayout": "blocked before page creation; setsockopt permission denied / SIGTRAP"
 }

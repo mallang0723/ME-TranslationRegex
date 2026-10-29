@@ -8,6 +8,8 @@ export async function build() {
     platform: 'browser', format: 'iife', target: ['es2020'], legalComments: 'inline',
     banner: { js: '// translation_regex_me · generated; see README.md and NOTICE.' } });
   copyFileSync('manifest.json', 'dist/manifest.json');
+  // Repository-root installation and dist/ installation must serve identical runtime bytes.
+  copyFileSync('dist/extension.js', 'extension.js');
   for (const name of ['README.md', 'NOTICE']) copyFileSync(name, `dist/${name}`);
   const output = readFileSync('dist/extension.js', 'utf8');
   if (/\bimport\s*\(/.test(output)) throw Error('Runtime dynamic import is forbidden');

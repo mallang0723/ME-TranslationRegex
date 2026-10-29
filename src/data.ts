@@ -36,7 +36,7 @@ export function createData(api: any, window: any) {
     const entry = { time: Date.now(), promise: Promise.resolve(null) };
     entry.promise = (async () => {
       try {
-        // The only runtime network operation: authenticated same-origin GET via the injector API.
+        // Display data reads use authenticated same-origin GET via the injector API.
         const response = await api.fetch(path, { method: 'GET', cache: 'no-store', signal: controller.signal });
         if (!response.ok) throw Error('API read failed');
         const result = await response.json();

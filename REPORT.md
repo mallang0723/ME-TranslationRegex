@@ -3,7 +3,7 @@
 작성일: 2026-10-29
 내부 키: `translation_regex_me`
 
-아래 기존 내용은 0.1 작업 기록입니다. 최신 변경·검증·제한 사항은 마지막 **0.2.0 실사용 피드백 반영** 절을 기준으로 합니다.
+아래 기존 내용은 0.1 작업 기록입니다. 최신 변경·검증·제한 사항은 마지막 **0.3.1 설정 런처·말랑 리모콘 호환** 절을 기준으로 합니다.
 
 ## 결과 (0.1 기록)
 
@@ -125,3 +125,109 @@ manifest, Shadow DOM UI, 빌드·정리·ZIP 구성은 지정된 slowplot/anywhe
 - 저장에 실패해 API에 없는 번역은 DOM에서 태그를 복원할 수 없으므로 “API에 저장된 번역문 없음”을 표시하고 재확인합니다. 원문 노드는 계속 표시합니다.
 - `.mari-message-actions`가 없는 화면에는 수동 버튼을 넣지 않습니다. 메시지 ID 없는 VN 화면, 여러 본문 조각, 편집기, 대화형 명령 결과가 본문에 포함된 경우는 적용하지 않습니다. 모든 테마·대화 모드 변형·실제 DEM/Sola 전체 규칙은 미확인입니다.
 - 외부 요청 및 금지 경로 접근 없이 작업했습니다. 참조 저장소와 `.git`은 읽기만 했으며 **git commit·push·저장소 생성은 수행하지 않았습니다**.
+
+## 0.2.1 플로팅 버튼 제거
+
+### 변경 내용과 이벤트 근거
+
+- 오른쪽 아래의 **번역 정규식** 플로팅 버튼, 버튼 전용 열기/닫기 이벤트, `right:12px; bottom:12px` 고정 위치 CSS를 제거했습니다. 닫힌 설정 UI 전체는 `hidden`으로 숨겨 입력창·전송 버튼의 클릭 영역을 차지하지 않습니다. 기존 코드에는 별도 플로팅 위치 저장 키나 드래그 코드가 없었습니다.
+- 액션 줄 점선 큐브의 **짧은 탭은 해당 메시지 적용/원래 번역 토글**, **600ms 터치 길게 누르기 또는 우클릭은 설정 열기**입니다. 툴팁과 접근성 이름에 “길게 눌러 설정 (우클릭 가능)”을 추가했고, 상태별 툴팁에서도 안내를 유지합니다.
+- `src/actions.ts:25-74`: 터치 시작·이동·종료, `contextmenu`, `selectstart`의 기본 동작과 전파를 차단합니다. 터치 시작에서 브라우저 기본 동작을 취소하므로 짧은 탭은 `touchend`에서 한 번 처리합니다. 뒤따르는 호환 클릭은 무시하며 길게 누르기 뒤에는 번역 토글을 실행하지 않습니다. 600ms 이전에 발생하는 터치 컨텍스트 메뉴는 취소하되 설정을 미리 열지는 않습니다. `src/actions.ts:14`의 `user-select:none`, `-webkit-user-select:none`, `-webkit-touch-callout:none`도 선택·네이티브 팝업 억제를 보완합니다.
+- 손가락이 10px 넘게 이동하거나 다중 터치·취소·버튼 이탈이 발생하면 길게 누르기를 취소합니다. 액션 줄 교체·버튼 제거·확장 cleanup에서는 타이머와 이벤트 리스너를 해제합니다. 다음 정상 터치·마우스·키보드 입력은 다시 사용할 수 있습니다.
+- 참조 근거는 읽기 전용 `marinara-engine-ref`의 `packages/client/src/components/chat/ChatMessage.tsx:2301-2315`(문서의 `touchstart`로 액션 닫기), `3911-3912`(조상 메시지의 클릭·더블클릭), `MariSuggestionChips.tsx:354-379`(길게 누르기 타이머, 취소, 네이티브 메뉴 및 후속 클릭 억제)입니다. 큐브의 이벤트가 호스트 조상 핸들러로 전파되지 않도록 했습니다. 참조 메시지 루트에서 별도 길게 누르기 메뉴 타이머는 확인되지 않았으며, 모든 실사용 호스트 변형의 메뉴 동작을 직접 검증했다는 의미는 아닙니다.
+- `src/runtime.ts:26-70`: 설정을 화면 중앙 모달로 변경했습니다. 폭 320px 및 `100vw - 24px` 제한, 동적 뷰포트 높이 제한, 내용 내부 스크롤을 적용했습니다. 닫기는 스크롤 영역 밖에 두고 최소 44×44px을 보장합니다. 닫기·바깥 영역 탭·Escape, 모달 내 Tab 순환, 원래 큐브로 초점 복귀를 제공합니다.
+- `translation_regex_me.settings`의 `autoApply`, `conversation` 읽기/쓰기 형식을 유지했습니다. 패널을 열고 닫는 동작은 저장값을 변경하지 않습니다. 자동 적용 기본 꺼짐과 이전 `enabled`를 승계하지 않는 0.2.0 동작도 유지합니다.
+- package/lock/manifest 확장 버전을 **0.2.1**로 맞췄습니다. manifest 최상위 스키마 버전은 1을 유지합니다. README와 dist의 사용법도 갱신했습니다.
+
+### 검증과 산출물
+
+- `npm test`: **94개 통과, 실패 0개, 생략 0개**. 결과: `qa/test-results.txt`.
+- 0.2.1 회귀 테스트 4개에서 플로팅 실행 버튼 미생성, 짧은 터치와 후속 클릭의 단일 토글, 600ms 타이머 등록 및 실행, 이른 컨텍스트 메뉴 억제, 길게 누르기·우클릭의 설정 열기, 호스트 조상으로의 전파 차단, 텍스트 선택 기본 동작 취소, 닫기·바깥 클릭·Escape, 초점 순환·복귀, 설정 보존, 이동·다중 터치·취소·제거 시 타이머 정리를 확인했습니다. 기존 패널 CSS 검증도 중앙 배치·뷰포트 제한·44px 닫기에 맞춰 갱신했습니다.
+- `scripts/browser-qa.mjs`는 360×780 가짜 호스트에 입력창과 전송 버튼을 추가하고, 닫힌 UI의 전송 버튼 히트 테스트, 실제 터치 이벤트의 짧은 탭/길게 누르기, 우클릭, 닫기, 모달 중앙 배치·뷰포트 포함·입력창과의 비겹침·44px 닫기를 검사하도록 갱신했습니다. 외부 요청은 차단하도록 구성했습니다.
+- **브라우저 레이아웃 검증은 미완료입니다.** `npm run qa:browser` 실행 시 Chromium이 페이지 생성 전에 crashpad `setsockopt: Operation not permitted` / SIGTRAP으로 종료했습니다. 브라우저 검사 완료 개수는 0이며, CSS/jsdom 검증을 실제 휴대폰 검증으로 대체해 주장하지 않습니다. 기록: `qa/browser-results.json`, `qa/browser-log.txt`.
+- `npm run package`: 성공. ZIP 루트 네 파일, CRC, dist와 바이트 일치, 0.2.1 버전, 산출물의 사용자 로컬 절대경로 부재를 확인했습니다. `node --check`(번들 및 브라우저 QA 스크립트), `git diff --check` 통과. 동봉 참조 소스 SHA-256도 모두 일치합니다.
+- 산출물: `translation_regex_me.personal-extension.zip`, **99,748바이트**.
+- SHA-256: `2f5fea1def724ecfba2ed59ecc2f89ca90cf59fbcb8ff4c83c81a269fdb306c6`.
+- 검증 요약: `qa/final-verification.json`. QA 로그의 로컬 경로는 `<repo>`로 치환했습니다.
+
+실제 Marinara 설치·실서버·휴대폰 Safari/Chrome 및 가상 키보드가 열린 화면은 검증하지 않았습니다. 액션 줄이 없는 화면에는 설정 진입용 큐브도 없다는 기존 적용 범위는 유지됩니다. 외부 요청과 지정된 금지 경로·포트 접근 없이 작업했으며 **git commit·push를 수행하지 않았습니다**.
+
+## 0.3.0 큐브 배치·번역 복구·다듬기 공존
+
+현재 미커밋 0.2.1 변경사항 위에 구현했습니다. package/lock/manifest 확장 버전은 **0.3.0**, manifest 최상위 가져오기 스키마 버전은 1입니다. Fetchy의 **`dist/manifest.json` + `dist/extension.js` 폴더 구조**와 ZIP 루트 네 파일을 유지했습니다. 아래 근거에서 `packages/…`는 읽기 전용 마리나라 참조 저장소, `polisher-ref/…`는 제공된 참고용 확장 사본 기준입니다. 로컬 절대경로는 기록하지 않았습니다.
+
+### 큐브 위치
+
+- `src/actions.ts:67`: 큐브를 `.mari-message-actions`의 **직접 마지막 자식 button**으로 넣습니다. 설정 슬라이더·다듬기 버튼 뒤에 붙으며, 뒤늦게 호스트 자식이 추가되면 큐브만 끝으로 옮깁니다. 기존 형제 wrapper, 48px 예약 패딩, 음수 마진, 부모 gap 보정은 제거했습니다.
+- `src/actions.ts:5`, `src/actions.ts:80`: `packages/client/src/components/chat/MessageActionButton.tsx:4,42-44`의 버튼 구조와 실제 클래스 문자열, 1em 아이콘, 색·hover·focus 변수를 따릅니다. 데스크톱 36×36px, 모바일 기본 28×32px이며 `packages/client/src/styles/globals.css:6829-6844`의 기존 모바일 flex 분배와 줄 간격을 그대로 받습니다. 큐브 전용 44px 공간을 강제하지 않습니다.
+- `src/runtime.ts:149`, `src/runtime.ts:185`: MutationObserver와 주기 확인으로 행 교체·버튼 삭제·새 형제 추가 후 복구합니다. 복제된 낡은 큐브만 제거하고 호스트·다듬기 컨트롤은 보존합니다. 0.2.1의 600ms 길게 누르기, 우클릭, 터치 이벤트 전파 억제, 모달 초점·닫기 동작을 유지했습니다.
+
+### 번역 API·진행·저장
+
+- `src/runtime.ts:42`, `src/runtime.ts:53`, `src/runtime.ts:81`: 기존 설정 진입에 **이어서 번역**, **나눠서 다시 번역**을 추가했습니다. 자동 이어 번역은 기본 꺼짐이며 정규식 자동 적용과 별도로 저장됩니다. 청크 n/m, 취소, 오류·취소 후 부분 결과 저장/버리기와 부분 저장 시 기존 번역을 대체한다는 안내를 제공합니다. 한 번에 한 작업을 실행하고 미처리 부분 결과가 있으면 다음 작업을 막습니다.
+- `src/translation.ts:94`: 공급자·출력 언어·연결·프롬프트·DeepL 키·DeepLX URL은 현재 채팅 metadata를 읽습니다. `packages/shared/src/utils/translator-defaults.ts:64-99`와 같은 구형 공통 언어/프롬프트 fallback 및 명시적 프롬프트 초기화 의미를 유지합니다. 호스트에 번역 스토어가 공개되지 않아 임의 내부 스토어 접근 없이 API metadata를 사용했습니다.
+- `src/translation.ts:114`, `src/translation.ts:195`: 마리나라 `POST /api/translate`에 `chatId,text,provider,targetLanguage,connectionId,systemPrompt,deeplApiKey,deeplxUrl`을 보내고 `{translatedText}`를 읽습니다. 근거는 `packages/client/src/hooks/use-translate.ts:94-104`, `packages/server/src/routes/translate.routes.ts:6-7`, `packages/server/src/services/translation.service.ts:29-60`입니다. 헤더는 `packages/client/src/lib/api-client.ts:284-317`, `packages/shared/src/constants/security.ts:1-5`에 맞춰 JSON 및 `x-marinara-csrf:1`, 존재하는 관리자 인증 헤더를 사용합니다. 요청은 same-origin `/api`로 제한하고 키를 추가 저장·로그 출력하지 않습니다.
+- `src/translation.ts:137`, `src/translation.ts:148`: 청크 요청 전과 저장 직전에 원문·활성 스와이프·번역·출처·숨김·longSource를 재확인합니다. 저장은 `PATCH /api/chats/:id/messages/:mid/extra`에 **`translation`, `translationSource: 현재 message.content`, `translationHidden:false`** 세 필드만 보냅니다. `use-translate.ts:105-118`과 같으며, `packages/server/src/routes/chats.routes.ts:2833-2844,2917-2918`에서 지원하는 `swipeIndex` 쿼리를 함께 보내 다른 스와이프로 잘못 저장되는 것을 방지합니다. 다듬기 필드 등 다른 extra는 부분 병합으로 유지됩니다.
+- `src/runtime.ts:87`, `src/runtime.ts:285`: 성공한 API 결과를 다시 읽어 정규식을 적용하고 호스트 메시지 쿼리를 무효화합니다(`packages/client/src/hooks/use-chats.ts:58`). 정규식 매칭이 없어도 새로 저장한 번역은 표시합니다. 실패 시 자동으로 부분 PATCH하지 않으며 기존 번역을 유지합니다. 부분 결과 저장은 명시적 버튼으로만 수행하고 동일성 검사를 다시 거칩니다.
+- `src/translation.ts:118`, `src/translation.ts:209`: POST 120초, 읽기/저장 15초 제한, 취소 신호, 늦은 응답 배제, 채팅 이동·cleanup 시 중단을 구현했습니다. 부분 결과는 메모리에만 보존하며 채팅 이동/종료 시 버립니다. 서버 공급자가 이미 처리 중인 호출의 비용·처리까지 취소된다고 보장하지 않습니다.
+
+### 청크·태그·끊김 휴리스틱
+
+- `src/translation.ts:7`, `src/translation.ts:24`: 약 3,000자에서 문단 → 문장 → 공백 경계를 우선합니다. 공백 없는 긴 문자열은 UTF-16 surrogate pair를 보존하며 나눕니다. 표시 정규식 대상의 상위집합인 **모든 태그 블록**을 원자적으로 취급해 중첩 태그·따옴표 속성의 `>`·닫히지 않은 블록도 청크 경계에서 나누지 않습니다. 큰 블록은 3,000자를 넘겨 한 청크로 두고 Google 5,000자/서비스 50,000자 요청 한도를 넘으면 오류로 중단합니다.
+- `src/translation.ts:45`: 태그와 속성을 충돌 없는 자리표시자로 감추고 내부 텍스트만 번역합니다. 자리표시자의 개수·순서·누락·중복 및 새 태그 삽입을 검사합니다. 복원 실패 시 **원문 태그 블록을 포함한 해당 청크 전체**를 그대로 보존하고 개수를 표시합니다. 청크 구분 공백은 원문 기준으로 복원해 순서대로 결합합니다.
+- `src/translation.ts:67`: 태그 제거 후 원문 600자 이상에서 번역/원문 길이 비율 `<0.45`, 또는 원문 300자·번역 40자 이상에서 원문은 문장부호로 끝나지만 번역은 그렇지 않으면 끊김을 의심합니다. 짧은 라벨은 제외합니다. 언어별 압축률·문체로 인한 오탐 가능성이 있으며, 자동 설정을 켰더라도 이 판정만으로 원문 위치를 결정하지 않습니다.
+- `src/translation.ts:74`: 번역이 원문의 정확한 앞부분이거나 번역 끝의 동일한 태그 블록(16자 이상)이 원문에 유일하게 존재할 때만 그 다음 원문을 이어 번역합니다. 반복 블록, 태그 중간 위치, 일반적인 서로 다른 언어의 문장 중간 종료는 위치가 불확실하므로 **나눠서 다시 번역**을 제안합니다. 임의 길이 비율로 앞부분을 생략하지 않습니다.
+- `src/translation.ts:177`, `src/translation.ts:211`, `src/runtime.ts:233`: 같은 채팅·메시지·스와이프·원문·번역의 자동 시도와 자신의 저장 결과를 기억해 무한 자동 요청을 막습니다. 최신 API에서 끊김·숨김·출처를 다시 확인합니다. 자동 적용이 꺼져 있어도 자동 이어 번역 설정만 켜서 사용할 수 있습니다.
+
+### 번역 다듬기 충돌 진단과 대응
+
+- **확인한 동작:** `polisher-ref/extension.js:69`의 `applyVisible`은 번역 노드의 `textContent`와 클래스를 바꿉니다. `:85-86`은 API translation 및 translationPolisher 필드를 읽고, `:192-193`은 translation·translationSource와 `translationPolisherLongSource` 등 보조 필드를 저장한 다음 DOM을 갱신합니다. `:226`은 다듬기 그룹의 설정 슬라이더를 추가합니다. 이 참고 사본에서는 longSource와 source가 같을 수 있어, 모든 실사용 출처 불일치가 그 필드 때문이라고 확정하지는 않았습니다.
+- `src/translation.ts:89`, `src/runtime.ts:245`: API **`extra.translation` 자체**를 정규식 입력으로 사용합니다. 출처가 다르더라도 `translationPolisherLongSource`가 **현재 원문과 정확히 같은 경우만** 허용하고 다른 스와이프의 긴 원문은 거부합니다. 별도 번역 칸·번역 전용 본문·대화 모드의 출처 검사에 동일하게 반영했습니다.
+- `src/runtime.ts:135`, `src/runtime.ts:174`, `src/runtime.ts:271`: fingerprint가 같은 다듬기 DOM 변경은 무시하며, 달라지면 API를 새로 읽고 렌더를 갱신합니다. DOM-only 변경마다 무조건 원본을 보였다 숨기는 처리를 제거했습니다. `[data-translation-polisher-ui]` 컨트롤은 건드리지 않고, 번역 영역 안에 컨트롤이 있으면 그 전체 영역을 숨기지 않습니다. 다듬기가 만든 번역 텍스트 노드는 계속 관찰합니다.
+- 참고용 확장의 **동작·필드만 조사했으며 코드를 복사하지 않았습니다.** 청크 처리·복원·작업 관리 코드는 새로 작성했습니다. 다듬기 UI/보조 필드를 삭제하거나 덮어쓰지 않습니다.
+
+### 검증과 산출물
+
+- `npm test`: **113개 통과, 실패 0개, 생략 0개**. 기존 94개를 새 배치에 맞춰 갱신하고 19개 테스트를 추가했습니다. 결과: `qa/test-results.txt`.
+- `tests/translation.test.mjs:29`: 청크 원문 완전 보존, 문단·문장 경계, 큰/중첩/비정상 태그 블록, Unicode 경계, 속성 보호, 자리표시자 손상·중복·재정렬 fallback, 끊김 판정, 보수적 이어 번역 위치와 불확실성 거부.
+- `tests/translation.test.mjs:75`: 기존 공급자/언어/연결/프롬프트·CSRF·same-origin 요청, 순차 호출과 세 저장 필드, 성공 후 정규식 재적용, 실패 시 기존 번역 유지, 부분 저장·버리기·재시도, 취소 후 늦은 응답, cleanup의 타이머 해제, 원문/스와이프/다듬기 변경과 채팅 이동 경쟁.
+- `tests/translation.test.mjs:146`: 자동 이어 번역 기본 꺼짐·독립 설정·반복 방지, longSource 출처 허용과 잘못된 출처 거부, 다듬기 DOM 변경 직후 API 결과 반영 및 동일 fingerprint의 렌더/요청 안정성, 두 확장 버튼 공존, 태그 복원 실패·공급자 한도, 빈 응답·진행 중 생성, 정규식이 없어도 새 번역 표시, 컨트롤 보존, 마지막 자식 재부착, 불확실한 자동 요청 반복 방지.
+- `npm run package`: 성공. ZIP **106,315바이트**, SHA-256 **`599aa62144d013074a354d0c871a5145cc0b6c3aed57733c7ebf4c4a17cc2812`**. ZIP CRC·루트 네 파일·dist 바이트 일치·0.3.0 버전·사용자 로컬 절대경로 부재 확인. `node --check` 번들/브라우저 QA 스크립트 및 `git diff --check` 통과. 기록된 마리나라 참조 원본 SHA-256 모두 일치했습니다. 요약: `qa/final-verification.json`, `qa/package.json`.
+- `scripts/browser-qa.mjs:60`: 360px에서 마지막 자식·호스트와 같은 버튼 크기·겹침/줄바꿈 검사를 새 배치에 맞게 갱신했습니다. **실행은 차단됨**: `npm run qa:browser`에서 Chromium이 페이지 생성 전에 crashpad `setsockopt: Operation not permitted` / SIGTRAP으로 종료했습니다. 완료된 브라우저 검사 0개이며 기록은 `qa/browser-results.json`, `qa/browser-log.txt`입니다. QA 로그의 로컬 경로는 `<repo>`로 치환했습니다.
+
+### 미확인·제한 및 준수 사항
+
+1. 실제 마리나라/Fetchy 설치, 실서버 공급자 번역 품질·CSRF 연동·React 화면 갱신, 실제 다듬기 확장과의 동시 실행, 휴대폰 브라우저의 간격·hover·터치·가상 키보드는 **미확인**입니다. 테스트는 가짜 API와 jsdom이며 실제 브라우저 레이아웃 통과를 주장하지 않습니다.
+2. 일반적인 다른 언어의 문장 중간 끊김은 안전한 대응 위치가 없으면 이어 붙이지 않고 전체 나눠 번역으로 유도합니다. 자리표시자를 훼손하는 공급자는 원문 청크가 남고, 5,000/50,000자를 넘는 단일 태그 블록은 분할하지 않습니다. 모든 실제 DEM/Sola 규칙·언어 조합 검증은 미완료입니다.
+3. 저장 직전 재조회와 명시적 스와이프 번호를 사용하지만 이 API에는 원문/번역의 조건부 원자 갱신이 없습니다. 마지막 GET과 PATCH 사이의 같은 스와이프 동시 편집, 서버가 저장한 뒤 응답이 유실되는 경우까지 완전히 해결하지는 못합니다. 두 확장의 번역 작업은 순차 실행을 권합니다. 호스트 쿼리 공개 인터페이스가 없는 환경에서는 확장의 새 번역 표시만 즉시 갱신하며 호스트 자체 캐시 갱신은 실사용 확인이 필요합니다.
+4. 기존 `.translation-text`/번역 전용 단일 본문·메시지 ID·액션 줄 적용 범위를 유지합니다. 편집기, 상호작용 본문, 번역 영역 내부의 다듬기 컨트롤은 숨기지 않습니다.
+5. 외부 네트워크 요청, 지정된 금지 경로·포트 접근, 참고 소스 수정 없이 작업했습니다. **git commit·push는 수행하지 않았으며 기존 미커밋 변경사항을 유지했습니다.**
+
+
+## 0.3.1 설정 런처·말랑 리모콘 호환
+
+기존 미커밋 0.3.0 변경 위에 구현했습니다. 제공된 `REMOTE-COMPAT.md`의 동작 계약을 읽고 적용했으며 참고용 리모콘 코드를 복사하지 않았습니다. package/lock/manifest 확장 버전은 **0.3.1**, manifest 스키마 버전은 1입니다.
+
+### 변경 내용
+
+- `src/launcher.ts`: 문서 본문에 아이콘형 점선 큐브 런처를 하나 유지합니다. 고정 `id`와 `data-testid`는 모두 **`translation-regex-launcher`**입니다. 44×44px 터치 영역, 오른쪽 가장자리, 기본 화면 중간 높이, 세로 드래그, **700ms 길게 누르면 기본 위치 초기화**를 제공합니다. 위치는 세션 내 메모리에만 유지합니다.
+- 표시된 composer wrapper와 textarea/contenteditable/role=textbox의 form 또는 편집 영역을 감지해 **입력창 위 8px**까지 이동을 제한합니다. ResizeObserver, DOM 변경, 창 크기·스크롤 및 visualViewport 크기·오프셋 변경에 대응합니다. 44px 영역을 둘 공간이 없으면 잠시 숨깁니다. 메시지 내부 편집기는 composer 후보에서 제외합니다.
+- 열기/닫기는 **click 이벤트**로 처리하므로 리모콘의 `element.click()`으로도 작동합니다. 드래그·길게 누르기·취소 직후의 클릭은 억제하고, 억제 상태는 다음 포인터 입력 또는 500ms 후 해제합니다. 모달은 화면 중앙에 배치되며 숨겨진 버튼의 좌표를 읽지 않습니다.
+- 위치 변경에는 top/right만 갱신하고, 자체 표시 설정에는 전용 data 속성만 사용합니다. 외부 클래스 목록, display/visibility 스타일, hidden 속성은 덮어쓰지 않습니다. 호스트가 버튼을 제거하면 같은 노드를 재부착하며 복제본은 제거합니다. 확장 재시작 뒤에도 동일 ID의 버튼은 하나입니다. cleanup에서 관찰자·타이머·이벤트·스타일·버튼을 제거합니다.
+- `src/runtime.ts`: **플로팅 런처 표시** 설정은 기본 켜짐이며 `showLauncher`로 기존 설정 객체에 추가 저장합니다. 이 옵션만 바꾸면 메시지별 정규식 적용 선택은 유지합니다. 꺼도 메시지 큐브의 600ms 길게 누르기·우클릭 설정 진입은 유지합니다. 리모콘의 숨김 상태는 별도로 보존합니다. 런처로 연 전역 설정에서는 특정 메시지가 필요한 번역 작업 메뉴를 숨기며 Tab 순환에서도 제외합니다.
+- `scripts/build.mjs`: 빌드·패키징 시 루트 manifest를 dist에 복사하고 dist 번들을 루트 **`extension.js`**로 복사합니다. 루트와 dist의 `manifest.json`, `extension.js`는 각각 바이트가 같습니다. 저장소 기본 주소를 사용하는 GitHub 확장 관리용 구조를 제공하며 기존 dist 폴더와 ZIP 루트 네 파일도 유지합니다.
+
+### 검증과 산출물
+
+- `tests/launcher.test.mjs`: 고정 ID/testid와 아이콘·44px CSS, 프로그램적 클릭 토글, 숨김 상태 클릭, 외부 숨김 클래스·스타일 보존, 재부착 시 노드 재사용·중복 제거, 설정 저장·재시작, 런처를 꺼도 메시지 큐브 길게 누르기로 설정 진입, 세로 드래그·composer/viewport 클램프, 후속 클릭 억제, 700ms 초기화·취소·cleanup 타이머 정리, composer 크기 변경·form fallback·visualViewport 대응을 검증합니다. 위치 검증은 jsdom의 가짜 측정값을 사용합니다.
+- 패키지 테스트에 **루트/dist 설치 파일 바이트 일치** 검증을 추가했습니다. 기존 새니타이즈 테스트는 확장이 직접 만든 런처 스타일만 예외로 인정하며 사용자 번역 CSS의 head 유출 금지는 유지합니다.
+- `scripts/browser-qa.mjs`: 360px에서 런처 44px·오른쪽 정렬·전송 버튼 히트 테스트, 세로 드래그·composer 비겹침, 숨겨진 런처의 프로그램적 클릭과 중앙 모달 검사를 추가했습니다. **브라우저 검증은 차단됨**: Chromium이 페이지 생성 전 crashpad `setsockopt: Operation not permitted` / SIGTRAP으로 종료했습니다. 완료된 브라우저 검사 0개이며 실제 모바일 레이아웃 통과를 주장하지 않습니다. 기록: `qa/browser-results.json`, `qa/browser-log.txt`.
+
+- `npm test`: **120개 통과, 실패 0개, 생략 0개**. 기존 113개와 새 테스트 7개가 모두 통과했습니다. 기록: `qa/test-results.txt`.
+- `npm run package`: 성공. ZIP **108,624바이트**, SHA-256 **`780324e571c7e2a6e912023d4a5667d4c033b77a790d6a8eb997c471c62c8c7c`**. ZIP CRC·루트 네 파일·dist 및 루트 설치 파일 바이트 일치·0.3.1 버전·참조 소스 SHA-256·로컬 절대경로 부재를 확인했습니다. `node --check` 번들/브라우저 QA 스크립트와 `git diff --check` 통과. 요약: `qa/final-verification.json`, `qa/package.json`.
+
+### 제한 및 준수 사항
+
+실제 Marinara·GitHub 확장 관리·말랑 리모콘 설치와 휴대폰 가상 키보드 환경은 미검증입니다. 알려진 wrapper와 편집기 fallback으로 composer를 감지하므로 다른 호스트 구조에서는 추가 확인이 필요합니다. CSS/jsdom 검증은 실제 기기 검증을 대체하지 않습니다.
+
+외부 요청과 지정된 금지 경로·포트 접근 없이 작업했습니다. 산출물과 QA 로그에 로컬 절대경로를 남기지 않으며 QA 경로는 `<repo>`로 치환합니다. 기존 미커밋 변경을 유지했고 **git commit·push는 수행하지 않았습니다**.

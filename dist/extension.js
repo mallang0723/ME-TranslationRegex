@@ -8991,69 +8991,124 @@
   }
 
   // src/actions.ts
-  var TITLE = "\uBC88\uC5ED\uBB38\uC5D0 \uD45C\uC2DC \uC815\uADDC\uC2DD \uC801\uC6A9";
-  var ROW = "data-translation-regex-row";
+  var TITLE = "\uBC88\uC5ED\uBB38\uC5D0 \uD45C\uC2DC \uC815\uADDC\uC2DD \uC801\uC6A9 \xB7 \uAE38\uAC8C \uB20C\uB7EC \uC124\uC815 (\uC6B0\uD074\uB9AD \uAC00\uB2A5)";
   var OWN = "data-translation-regex-action";
-  function createActions(window2, onToggle) {
+  function createActions(window2, onToggle, onSettings) {
     const document2 = window2.document, entries2 = /* @__PURE__ */ new Map();
     const css = document2.createElement("style");
     css.setAttribute(OWN, "");
     css.textContent = `
-.mari-message-actions[${ROW}]{box-sizing:border-box;min-height:44px;padding-inline-end:48px!important;flex-wrap:nowrap!important}
-[${OWN}].translation-regex-action{position:relative;display:flex;align-items:center;justify-content:center;width:44px;height:44px;margin-block-start:-44px;margin-inline-start:auto;opacity:0;transition:opacity .15s}
-.mari-message-actions.opacity-100 + [${OWN}],.mari-message-actions:focus-within + [${OWN}],[data-message-id]:hover [${OWN}],[${OWN}]:focus-within{opacity:1}
-[${OWN}] button{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;position:relative;width:44px;height:44px;min-width:44px;padding:0;border:0;border-radius:6px;background:transparent;font:inherit;font-size:16px;color:var(--marinara-chat-message-action-text,currentColor);cursor:pointer;touch-action:manipulation}
-@media(max-width:767px){[${OWN}] button{font-size:14px}}
-@media(pointer:fine){[${OWN}] button:hover{background:var(--marinara-chat-message-action-bg-hover);color:var(--marinara-chat-message-action-text-hover)}}
-[${OWN}] button:active{background:var(--marinara-chat-message-action-bg-hover)}
-[${OWN}] button:focus-visible{outline:2px solid var(--marinara-chat-chrome-focus-ring,currentColor);outline-offset:-2px}
-[${OWN}] button[aria-pressed=true]::after,[${OWN}] button[aria-busy=true]::after,[${OWN}] button[data-state=error]::after{content:'';position:absolute;right:5px;top:5px;width:5px;height:5px;border-radius:50%;background:currentColor}
-[${OWN}] button[data-state=error]::after{background:#e86868}
-[${OWN}] button[aria-busy=true]::after{animation:translation-regex-pulse .8s infinite alternate}
+button[${OWN}]{position:relative;touch-action:manipulation;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+button[${OWN}][aria-pressed=true]::after,button[${OWN}][aria-busy=true]::after,button[${OWN}][data-state=error]::after{content:'';position:absolute;right:3px;top:3px;width:4px;height:4px;border-radius:50%;background:currentColor}
+button[${OWN}][data-state=error]::after{background:#e86868}
+button[${OWN}][aria-busy=true]::after{animation:translation-regex-pulse .8s infinite alternate}
 @keyframes translation-regex-pulse{to{opacity:.25}}`;
     document2.head.append(css);
     function remove(row, entry) {
+      entry.cleanup();
       entry.host.remove();
-      row.removeAttribute(ROW);
       entries2.delete(row);
     }
-    function align(row, host) {
-      const parent = window2.getComputedStyle(row.parentElement);
-      const gap = parent.display === "flex" && parent.flexDirection === "column" || parent.display === "grid" ? parseFloat(parent.rowGap) || 0 : 0;
-      host.style.marginBlockStart = `${-44 - gap}px`;
-      host.style.flexShrink = "0";
+    function gestures(button, id) {
+      const life = new window2.AbortController();
+      let timer, touch, held = false, cancelled = false, suppressClick = false;
+      const clear = () => {
+        window2.clearTimeout(timer);
+        timer = void 0;
+      };
+      const stop = (e) => e.stopPropagation();
+      const consume = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      };
+      const listen = (type, fn) => button.addEventListener(type, fn, { passive: false, signal: life.signal });
+      listen("pointerdown", (e) => {
+        stop(e);
+        suppressClick = false;
+      });
+      listen("mousedown", stop);
+      listen("pointerup", stop);
+      listen("touchstart", (e) => {
+        consume(e);
+        clear();
+        suppressClick = true;
+        held = false;
+        cancelled = e.touches.length !== 1;
+        touch = e.touches[0];
+        if (cancelled) return;
+        timer = window2.setTimeout(() => {
+          timer = void 0;
+          if (!button.isConnected) return;
+          held = true;
+          onSettings(button);
+        }, 600);
+      });
+      listen("touchmove", (e) => {
+        consume(e);
+        const current = [...e.touches].find((t) => t.identifier === touch?.identifier);
+        if (!current || Math.hypot(current.clientX - touch.clientX, current.clientY - touch.clientY) > 10) {
+          cancelled = true;
+          clear();
+        }
+      });
+      listen("touchend", (e) => {
+        consume(e);
+        clear();
+        if (touch && !held && !cancelled && e.touches.length === 0) onToggle(id);
+        touch = void 0;
+      });
+      for (const type of ["touchcancel", "pointercancel", "pointerleave"]) listen(type, (e) => {
+        stop(e);
+        clear();
+        cancelled = true;
+        touch = void 0;
+      });
+      listen("contextmenu", (e) => {
+        consume(e);
+        if (touch) return;
+        clear();
+        suppressClick = true;
+        onSettings(button);
+      });
+      listen("selectstart", consume);
+      listen("keydown", () => {
+        suppressClick = false;
+      });
+      listen("click", (e) => {
+        consume(e);
+        if (!suppressClick) onToggle(id);
+      });
+      listen("dblclick", stop);
+      return () => {
+        clear();
+        life.abort();
+      };
     }
     function sync() {
-      for (const [row, entry] of entries2) if (!row.isConnected || !entry.host.isConnected || row.nextSibling !== entry.host || row.closest("[data-message-id]")?.getAttribute("data-message-id") !== entry.id) remove(row, entry);
+      for (const [row, entry] of entries2) if (!row.isConnected || !entry.host.isConnected || entry.host.parentElement !== row || row.closest("[data-message-id]")?.getAttribute("data-message-id") !== entry.id) remove(row, entry);
       const seen = /* @__PURE__ */ new Set();
       for (const row of document2.querySelectorAll(".mari-message-actions")) {
         const root2 = row.closest("[data-message-id]"), id = root2?.getAttribute("data-message-id");
         if (!id || root2.matches(".mari-message-user,[data-message-role=user]") || seen.has(id)) continue;
         seen.add(id);
         if (entries2.has(row)) {
-          align(row, entries2.get(row).host);
+          const { button: button2 } = entries2.get(row);
+          if (row.lastElementChild !== button2) row.append(button2);
           continue;
         }
-        const host = document2.createElement("div");
-        host.setAttribute(OWN, "");
-        host.className = "translation-regex-action";
+        for (const stale of row.querySelectorAll(`button[${OWN}]`)) stale.remove();
         const button = document2.createElement("button");
         button.type = "button";
-        button.className = "mari-chat-style-control mari-chat-message-action";
+        button.setAttribute(OWN, "");
+        button.className = "mari-chat-style-control mari-chat-message-action [-webkit-tap-highlight-color:transparent] inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md p-0 text-base leading-none transition-colors md:transition-all md:active:scale-90 max-md:h-8 max-md:w-7 max-md:max-w-full max-md:text-sm max-md:active:bg-[var(--marinara-chat-message-action-bg-hover)] disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-30 text-[var(--marinara-chat-message-action-text)] [@media(pointer:fine)]:hover:bg-[var(--marinara-chat-message-action-bg-hover)] [@media(pointer:fine)]:hover:text-[var(--marinara-chat-message-action-text-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--marinara-chat-chrome-focus-ring)]";
         button.title = TITLE;
         button.setAttribute("aria-label", TITLE);
         button.setAttribute("aria-pressed", "false");
+        button.setAttribute("aria-haspopup", "dialog");
         button.innerHTML = '<svg width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-dasharray="2 2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 22 7.5v9L12 22 2 16.5v-9ZM2 7.5 12 13l10-5.5M12 13v9M12 2v11"/></svg>';
-        button.addEventListener("click", (event) => {
-          event.stopPropagation();
-          onToggle(id);
-        });
-        button.addEventListener("dblclick", (event) => event.stopPropagation());
-        host.append(button);
-        align(row, host);
-        row.setAttribute(ROW, "");
-        row.after(host);
-        entries2.set(row, { host, button, id });
+        const cleanup = gestures(button, id);
+        row.append(button);
+        entries2.set(row, { host: button, button, id, cleanup });
       }
     }
     function state(id, kind, detail = "") {
@@ -9076,6 +9131,481 @@
     };
   }
 
+  // src/launcher.ts
+  var LAUNCHER_ID = "translation-regex-launcher";
+  var COMPOSERS = '.composer,.mari-composer,.mari-chat-composer,[data-testid="composer"],[data-testid="chat-composer"],[data-chat-composer]';
+  var SIZE = 44;
+  var GAP = 8;
+  function createLauncher(window2, onToggle, shown) {
+    const document2 = window2.document, life = new window2.AbortController();
+    const button = document2.createElement("button"), css = document2.createElement("style");
+    css.setAttribute("data-translation-regex-launcher-style", "");
+    button.id = LAUNCHER_ID;
+    button.dataset.testid = LAUNCHER_ID;
+    button.type = "button";
+    button.setAttribute("aria-label", "\uBC88\uC5ED\uBB38 \uC815\uADDC\uC2DD \uC124\uC815 \xB7 \uC704\uC544\uB798\uB85C \uC774\uB3D9 \xB7 0.7\uCD08 \uAE38\uAC8C \uB20C\uB7EC \uC704\uCE58 \uCD08\uAE30\uD654");
+    button.title = button.getAttribute("aria-label");
+    button.setAttribute("aria-haspopup", "dialog");
+    button.setAttribute("aria-expanded", "false");
+    button.innerHTML = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-dasharray="2 2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 22 7.5v9L12 22 2 16.5v-9ZM2 7.5 12 13l10-5.5M12 13v9M12 2v11"/></svg>';
+    css.textContent = `#${LAUNCHER_ID}{position:fixed;right:0;z-index:999;box-sizing:border-box;width:44px;height:44px;min-width:44px;min-height:44px;padding:0;border:1px solid #6c7185;border-radius:10px 0 0 10px;background:var(--marinara-chat-message-action-bg-hover,#303444);color:var(--marinara-chat-message-action-text,#eee);cursor:pointer;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+#${LAUNCHER_ID} svg{display:block;margin:auto;pointer-events:none}
+#${LAUNCHER_ID}[data-launcher-disabled],#${LAUNCHER_ID}[data-launcher-no-room]{display:none!important}`;
+    document2.head.append(css);
+    let disposed = false, wantedY, top = 0, press, holdTimer, clickTimer, suppressClick = false;
+    const observed = /* @__PURE__ */ new Set();
+    const resize = window2.ResizeObserver ? new window2.ResizeObserver(() => sync()) : void 0;
+    function attr(name, value) {
+      if (button.hasAttribute(name) !== value) button.toggleAttribute(name, value);
+    }
+    function sync() {
+      if (disposed) return;
+      for (const stale of document2.querySelectorAll(`#${LAUNCHER_ID}`)) if (stale !== button) stale.remove();
+      if (button.parentNode !== document2.body) document2.body.append(button);
+      const viewport = window2.visualViewport;
+      const start2 = viewport?.offsetTop || 0, height = viewport?.height || window2.innerHeight;
+      const min = start2 + GAP;
+      let bottom = start2 + height - GAP;
+      const composers = new Set(document2.querySelectorAll(COMPOSERS));
+      for (const input of document2.querySelectorAll('textarea,[contenteditable="true"],[role="textbox"]')) {
+        if (!input.closest("[data-message-id],#translation_regex_me")) composers.add(input.closest(COMPOSERS) || input.closest("form") || input);
+      }
+      for (const old of observed) if (!composers.has(old)) {
+        resize?.unobserve(old);
+        observed.delete(old);
+      }
+      for (const composer of composers) {
+        if (!observed.has(composer)) {
+          observed.add(composer);
+          resize?.observe(composer);
+        }
+        const rect = composer.getBoundingClientRect(), style = window2.getComputedStyle(composer);
+        if (rect.width > 0 && rect.height > 0 && rect.bottom > start2 && rect.top < start2 + height && style.display !== "none" && style.visibility !== "hidden") bottom = Math.min(bottom, rect.top - GAP);
+      }
+      const max = bottom - SIZE;
+      attr("data-launcher-disabled", !shown);
+      attr("data-launcher-no-room", max < min);
+      top = Math.max(min, Math.min(max, wantedY ?? start2 + (height - SIZE) / 2));
+      if (button.style.top !== `${top}px`) button.style.top = `${top}px`;
+      const right = Math.max(0, window2.innerWidth - ((viewport?.offsetLeft || 0) + (viewport?.width || window2.innerWidth)));
+      if (button.style.right !== `${right}px`) button.style.right = `${right}px`;
+    }
+    function clearHold() {
+      window2.clearTimeout(holdTimer);
+      holdTimer = void 0;
+    }
+    function suppress() {
+      suppressClick = true;
+      window2.clearTimeout(clickTimer);
+      clickTimer = window2.setTimeout(() => {
+        suppressClick = false;
+        clickTimer = void 0;
+      }, 500);
+    }
+    function end() {
+      clearHold();
+      const previous = press;
+      press = void 0;
+      if (previous?.dragged || previous?.held) suppress();
+      try {
+        if (previous) button.releasePointerCapture(previous.id);
+      } catch {
+      }
+    }
+    const listen = (target, type, fn) => target.addEventListener(type, fn, { signal: life.signal, passive: false });
+    listen(button, "pointerdown", (e) => {
+      e.stopPropagation();
+      if (press) {
+        end();
+        suppress();
+        return;
+      }
+      if (e.button !== 0 || e.isPrimary === false) return;
+      window2.clearTimeout(clickTimer);
+      suppressClick = false;
+      press = { id: e.pointerId, y: e.clientY, top, dragged: false, held: false };
+      try {
+        button.setPointerCapture(e.pointerId);
+      } catch {
+      }
+      holdTimer = window2.setTimeout(() => {
+        holdTimer = void 0;
+        if (!press || press.dragged || !button.isConnected) return;
+        press.held = true;
+        wantedY = void 0;
+        sync();
+      }, 700);
+    });
+    listen(window2, "pointermove", (e) => {
+      if (!press || e.pointerId !== press.id) return;
+      const dy = e.clientY - press.y;
+      if (Math.abs(dy) > 6) {
+        press.dragged = true;
+        clearHold();
+      }
+      if (press.dragged) {
+        e.preventDefault();
+        wantedY = press.top + dy;
+        sync();
+      }
+    });
+    listen(window2, "pointerup", (e) => {
+      if (press?.id === e.pointerId) end();
+    });
+    listen(window2, "pointercancel", (e) => {
+      if (press?.id === e.pointerId) {
+        end();
+        suppress();
+      }
+    });
+    listen(button, "lostpointercapture", () => {
+      if (press) {
+        end();
+        suppress();
+      }
+    });
+    listen(window2, "blur", end);
+    listen(button, "click", (e) => {
+      e.stopPropagation();
+      if (suppressClick) {
+        suppressClick = false;
+        window2.clearTimeout(clickTimer);
+        e.preventDefault();
+        return;
+      }
+      onToggle(button);
+    });
+    for (const type of ["contextmenu", "selectstart"]) listen(button, type, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    listen(window2, "resize", sync);
+    listen(window2, "scroll", sync);
+    if (window2.visualViewport) for (const type of ["resize", "scroll"]) listen(window2.visualViewport, type, sync);
+    const observer = new window2.MutationObserver(() => {
+      if (!button.isConnected) end();
+      sync();
+    });
+    sync();
+    observer.observe(document2.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["class", "style", "hidden"] });
+    return {
+      button,
+      sync,
+      setShown(value) {
+        shown = value;
+        sync();
+      },
+      dispose() {
+        disposed = true;
+        end();
+        window2.clearTimeout(clickTimer);
+        life.abort();
+        observer.disconnect();
+        resize?.disconnect();
+        button.remove();
+        css.remove();
+      }
+    };
+  }
+
+  // src/translation.ts
+  var markup = () => /<!--[\s\S]*?-->|<\/?[A-Za-z][\w:.-]*(?:\s+(?:[^<>"']|"[^"]*"|'[^']*')*)?\s*\/?>/g;
+  var voidTags = new Set("area base br col embed hr img input link meta param source track wbr".split(" "));
+  function tagRanges(text2) {
+    const ranges = [], stack = [];
+    let start2 = 0;
+    for (const match of text2.matchAll(markup())) {
+      const token = match[0], name = /^<\/?([\w:.-]+)/.exec(token)?.[1].toLowerCase();
+      const begin = match.index, end = begin + token.length;
+      if (!name || voidTags.has(name) || /\/>$/.test(token)) {
+        if (!stack.length) ranges.push([begin, end]);
+        continue;
+      }
+      if (!stack.length) start2 = begin;
+      if (token.startsWith("</")) {
+        if (stack.at(-1) === name) stack.pop();
+        else if (stack.length) continue;
+        if (!stack.length) ranges.push([start2, end]);
+      } else stack.push(name);
+    }
+    if (stack.length) ranges.push([start2, text2.length]);
+    return ranges;
+  }
+  function splitTranslation(text2, limit = 3e3) {
+    if (!Number.isInteger(limit) || limit < 32) throw Error("Invalid chunk limit");
+    const ranges = tagRanges(text2), chunks = [];
+    const safe = (n) => !ranges.some(([a, b]) => a < n && n < b);
+    let start2 = 0;
+    while (start2 < text2.length) {
+      let end = Math.min(start2 + limit, text2.length);
+      if (end < text2.length) {
+        const slice = text2.slice(start2, end);
+        const boundary = (pattern) => [...slice.matchAll(pattern)].map((m) => start2 + m.index + m[0].length).filter((n) => n > start2 && safe(n)).at(-1);
+        end = boundary(/\n[ \t]*\n+/g) ?? boundary(/[.!?。！？]["'”’»)]*\s+/g) ?? boundary(/\s+/g) ?? end;
+        const block = ranges.find(([a, b]) => a < end && end < b);
+        if (block) end = block[0] > start2 ? block[0] : block[1];
+        if (end < text2.length && /[\uDC00-\uDFFF]/.test(text2[end])) end--;
+      }
+      chunks.push(text2.slice(start2, end));
+      start2 = end;
+    }
+    return chunks;
+  }
+  function protectTags(source) {
+    let prefix = "TRX_TAG_";
+    while (source.includes(prefix)) prefix += "X";
+    const tags = [];
+    const token = (i) => `[[${prefix}${i}]]`;
+    const text2 = source.replace(markup(), (tag) => {
+      tags.push(tag);
+      return token(tags.length - 1);
+    });
+    return { text: text2, restore(output) {
+      let previous = -1;
+      for (let i = 0; i < tags.length; i++) {
+        const at = output.indexOf(token(i));
+        if (at <= previous || output.indexOf(token(i), at + 1) !== -1) return { text: source, fallback: true };
+        previous = at;
+      }
+      if (tags.length && [...output.matchAll(markup())].length) return { text: source, fallback: true };
+      const restored = output.replace(new RegExp(`\\[\\[${prefix}(\\d+)\\]\\]`, "g"), (whole, n) => tags[Number(n)] ?? whole);
+      if (restored.includes(`[[${prefix}`)) return { text: source, fallback: true };
+      return { text: restored, fallback: false };
+    } };
+  }
+  var prose = (s) => s.replace(markup(), "").trim();
+  var terminal = (s) => /[.!?。！？…]["'”’»)*\]]*$/.test(s.trim());
+  function truncation(source, translation) {
+    const a = prose(source), b = prose(translation);
+    const lowRatio = a.length >= 600 && b.length > 0 && b.length / a.length < 0.45;
+    const midSentence = a.length >= 300 && b.length >= 40 && terminal(a) && !terminal(b);
+    return { suspected: lowRatio || midSentence, lowRatio, midSentence };
+  }
+  function continuationOffset(source, translation) {
+    const tail = translation.trimEnd();
+    if (!tail) return null;
+    if (source.startsWith(tail) && tail.length < source.length && !tagRanges(source).some(([a, b]) => a < tail.length && tail.length < b)) return tail.length;
+    const ranges = tagRanges(tail), last = ranges.at(-1);
+    if (last && last[1] === tail.length) {
+      const anchor = tail.slice(last[0], last[1]), at = source.indexOf(anchor);
+      if (anchor.length >= 16 && at >= 0 && source.indexOf(anchor, at + 1) === -1 && at + anchor.length < source.length && !tagRanges(source).some(([a, b]) => a < at + anchor.length && at + anchor.length < b)) return at + anchor.length;
+    }
+    return null;
+  }
+  function sourceMatches(message, extra = record(message.extra)) {
+    return extra.translationSource === message.content || typeof extra.translationPolisherLongSource === "string" && extra.translationPolisherLongSource.length > 0 && extra.translationPolisherLongSource === message.content;
+  }
+  function translationConfig(chat) {
+    const meta = record(chat.metadata);
+    const string = (key) => typeof meta[key] === "string" ? meta[key] : void 0;
+    const prompt = meta.translationOutputPrompt === void 0 ? string("translationPrompt") : string("translationOutputPrompt");
+    return {
+      chatId: chat.id,
+      provider: ["ai", "google", "deepl", "deeplx"].includes(meta.translationProvider) ? meta.translationProvider : "google",
+      targetLanguage: string("translationOutputTargetLang")?.trim() || string("translationTargetLang")?.trim() || "en",
+      connectionId: string("translationConnectionId"),
+      systemPrompt: prompt,
+      deeplApiKey: string("translationDeeplApiKey"),
+      deeplxUrl: string("translationDeeplxUrl")
+    };
+  }
+  function createTranslationJobs(api, window2, notify, saved) {
+    let disposed = false, job;
+    const controllers = /* @__PURE__ */ new Set();
+    const attempted = /* @__PURE__ */ new Set();
+    const signature = (m) => JSON.stringify([
+      m.content,
+      m.activeSwipeIndex ?? 0,
+      record(m.extra).translation,
+      record(m.extra).translationSource,
+      record(m.extra).translationHidden,
+      record(m.extra).translationPolisherLongSource
+    ]);
+    const active = (j) => !disposed && job === j && activeChatId(window2) === j.chatId;
+    const check = (j) => {
+      if (!active(j) || j.controller.signal.aborted) throw Error("\uCDE8\uC18C\uB428 \xB7 \uAE30\uC874 \uBC88\uC5ED \uC720\uC9C0");
+    };
+    async function request(path, method, body, parent) {
+      if (disposed || !path.startsWith("/api/") || path.includes("://")) throw Error("API unavailable");
+      const controller = new window2.AbortController();
+      controllers.add(controller);
+      const abort = () => controller.abort();
+      parent.addEventListener("abort", abort, { once: true });
+      const timeout = window2.setTimeout(abort, method === "POST" ? 12e4 : 15e3);
+      controller.signal.addEventListener("abort", () => window2.clearTimeout(timeout), { once: true });
+      const headers = {};
+      if (method !== "GET") {
+        headers["x-marinara-csrf"] = "1";
+        headers["Content-Type"] = "application/json";
+      }
+      try {
+        if (parent.aborted) controller.abort();
+        try {
+          const secret = window2.localStorage.getItem("marinara_admin_secret")?.trim();
+          if (secret) headers["X-Admin-Secret"] = secret;
+        } catch {
+        }
+        if (controller.signal.aborted) throw Error("\uCDE8\uC18C\uB428");
+        const response = await Promise.race([
+          api.fetch(path, {
+            method,
+            headers,
+            body: body === void 0 ? void 0 : JSON.stringify(body),
+            cache: "no-store",
+            credentials: "same-origin",
+            signal: controller.signal
+          }),
+          new Promise((_, reject) => controller.signal.addEventListener("abort", () => reject(Error("\uCDE8\uC18C \uB610\uB294 \uC694\uCCAD \uC2DC\uAC04 \uCD08\uACFC")), { once: true }))
+        ]);
+        if (controller.signal.aborted || disposed) throw Error("\uCDE8\uC18C \uB610\uB294 \uC694\uCCAD \uC2DC\uAC04 \uCD08\uACFC");
+        if (!response.ok) throw Error(`\uBC88\uC5ED API \uC2E4\uD328 (${response.status ?? "unknown"}) \xB7 \uAE30\uC874 \uBC88\uC5ED \uC720\uC9C0`);
+        return response.status === 204 ? void 0 : await response.json();
+      } finally {
+        window2.clearTimeout(timeout);
+        parent.removeEventListener("abort", abort);
+        controllers.delete(controller);
+      }
+    }
+    async function verify(j) {
+      check(j);
+      const messages = await request(`/api/chats/${encodeURIComponent(j.chatId)}/messages`, "GET", void 0, j.controller.signal);
+      check(j);
+      const current = Array.isArray(messages) && messages.find((m) => m.id === j.messageId);
+      if (!current || signature(current) !== j.signature) throw Error("\uC6D0\uBB38\xB7\uC2A4\uC640\uC774\uD504 \uB610\uB294 \uBC88\uC5ED\uC774 \uBCC0\uACBD\uB428 \xB7 \uC800\uC7A5\uD558\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4");
+    }
+    const resultText = (j) => j.prefix + j.parts.join("");
+    function emit(j, text2, busy) {
+      if (!disposed && job === j) notify({ messageId: j.messageId, text: text2, busy, partial: !busy && j.parts.length > 0 });
+    }
+    async function persist(j) {
+      await verify(j);
+      const text2 = resultText(j);
+      await request(
+        `/api/chats/${encodeURIComponent(j.chatId)}/messages/${encodeURIComponent(j.messageId)}/extra?swipeIndex=${j.swipe}`,
+        "PATCH",
+        { translation: text2, translationSource: j.source, translationHidden: false },
+        j.controller.signal
+      );
+      if (!active(j)) return;
+      attempted.add(`${j.chatId}:${j.messageId}:${JSON.stringify([j.source, j.swipe, text2])}`);
+      j.parts = [];
+      saved(j, text2);
+      emit(j, `\uBC88\uC5ED \uC800\uC7A5 \uC644\uB8CC${j.fallbacks ? ` \xB7 \uD0DC\uADF8 \uBCF5\uC6D0 \uC2E4\uD328 ${j.fallbacks}\uAC1C \uCCAD\uD06C\uB294 \uC6D0\uBB38 \uBCF4\uC874` : ""}`, false);
+    }
+    async function execute(messageId, mode, automatic = false) {
+      if (disposed || job?.busy || job?.parts.length) return;
+      const chatId = activeChatId(window2);
+      if (!chatId) return;
+      const j = { chatId, messageId, controller: new window2.AbortController(), busy: true, parts: [], prefix: "", fallbacks: 0 };
+      job = j;
+      emit(j, "\uBC88\uC5ED \uC900\uBE44 \uC911", true);
+      try {
+        const [chat, messages, generation] = await Promise.all([
+          request(`/api/chats/${encodeURIComponent(chatId)}`, "GET", void 0, j.controller.signal),
+          request(`/api/chats/${encodeURIComponent(chatId)}/messages`, "GET", void 0, j.controller.signal),
+          request(`/api/generate/status/${encodeURIComponent(chatId)}`, "GET", void 0, j.controller.signal)
+        ]);
+        check(j);
+        if (generation?.active !== false || generation.translating) throw Error("\uC0DD\uC131/\uBC88\uC5ED \uC911 \xB7 \uC644\uB8CC \uD6C4 \uB2E4\uC2DC \uC2DC\uB3C4\uD558\uC138\uC694");
+        const message = Array.isArray(messages) && messages.find((m) => m.id === messageId);
+        if (chat?.id !== chatId || !message || message.role !== "assistant" || typeof message.content !== "string" || !message.content.trim()) throw Error("\uD604\uC7AC AI \uC6D0\uBB38\uC744 \uD655\uC778\uD560 \uC218 \uC5C6\uC74C");
+        const extra = record(message.extra), raw = typeof extra.translation === "string" ? extra.translation : "";
+        if (automatic && (extra.translationHidden === true || !sourceMatches(message) || !truncation(message.content, raw).suspected)) {
+          emit(j, "\uCD5C\uC2E0 \uBC88\uC5ED\uC740 \uC790\uB3D9 \uC774\uC5B4 \uBC88\uC5ED \uB300\uC0C1\uC774 \uC544\uB2D9\uB2C8\uB2E4", false);
+          return;
+        }
+        j.source = message.content;
+        j.swipe = message.activeSwipeIndex ?? 0;
+        j.signature = signature(message);
+        const attempt = `${chatId}:${messageId}:${JSON.stringify([j.source, j.swipe, raw])}`;
+        if (automatic && attempted.has(attempt)) {
+          emit(j, "\uC774\uBBF8 \uC790\uB3D9 \uD655\uC778\uD55C \uBC88\uC5ED\uC785\uB2C8\uB2E4", false);
+          return;
+        }
+        attempted.add(attempt);
+        let offset = 0;
+        if (mode === "continue") {
+          if (!sourceMatches(message)) throw Error("\uD604\uC7AC \uC6D0\uBB38\uACFC \uBC88\uC5ED \uCD9C\uCC98 \uBD88\uC77C\uCE58 \xB7 \uB098\uB220\uC11C \uB2E4\uC2DC \uBC88\uC5ED\uC744 \uC0AC\uC6A9\uD558\uC138\uC694");
+          const estimated = continuationOffset(j.source, raw);
+          if (estimated === null) throw Error("\uC774\uC5B4\uC9C8 \uC6D0\uBB38 \uC704\uCE58\uAC00 \uBD88\uD655\uC2E4\uD569\uB2C8\uB2E4 \xB7 \uB098\uB220\uC11C \uB2E4\uC2DC \uBC88\uC5ED\uC744 \uC0AC\uC6A9\uD558\uC138\uC694");
+          offset = estimated;
+          j.prefix = raw.trimEnd();
+        }
+        const config = translationConfig(chat), chunks = splitTranslation(j.source.slice(offset));
+        for (let i = 0; i < chunks.length; i++) {
+          check(j);
+          await verify(j);
+          emit(j, `\uBC88\uC5ED \uC911 \xB7 \uCCAD\uD06C ${i + 1}/${chunks.length}`, true);
+          const chunk = chunks[i], protectedText = protectTags(chunk);
+          if (protectedText.text.length > (config.provider === "google" ? 5e3 : 5e4)) throw Error("\uD0DC\uADF8 \uBE14\uB85D\uC774 \uACF5\uAE09\uC790 \uD55C\uB3C4\uB97C \uB118\uC2B5\uB2C8\uB2E4 \xB7 \uD0DC\uADF8\uB97C \uB098\uB204\uC9C0 \uC54A\uACE0 \uC911\uB2E8\uD588\uC2B5\uB2C8\uB2E4");
+          const response = await request("/api/translate", "POST", { ...config, text: protectedText.text }, j.controller.signal);
+          check(j);
+          if (typeof response?.translatedText !== "string" || !response.translatedText.trim()) throw Error("\uBE44\uC5B4 \uC788\uB294 \uBC88\uC5ED \uC751\uB2F5");
+          const restored = protectedText.restore(response.translatedText);
+          if (restored.fallback) j.fallbacks++;
+          const leading = /^\s*/.exec(chunk)[0], trailing = /\s*$/.exec(chunk)[0];
+          j.parts.push(leading + restored.text.trim() + trailing);
+        }
+        await persist(j);
+      } catch (error) {
+        j.controller.abort();
+        emit(j, `${error instanceof Error ? error.message : "\uBC88\uC5ED \uC2E4\uD328"}${j.parts.length ? " \xB7 \uC644\uB8CC\uB41C \uBD80\uBD84 \uACB0\uACFC\uB97C \uC800\uC7A5\uD558\uAC70\uB098 \uBC84\uB9B4 \uC218 \uC788\uC2B5\uB2C8\uB2E4" : ""}`, false);
+      } finally {
+        j.busy = false;
+        if (active(j)) notify({ busy: false, partial: j.parts.length > 0, messageId });
+      }
+    }
+    return {
+      execute,
+      get busy() {
+        return !!job?.busy;
+      },
+      get pending() {
+        return !!job?.busy || !!job?.parts.length;
+      },
+      canAuto(chatId, m) {
+        return !this.pending && !attempted.has(`${chatId}:${m.id}:${JSON.stringify([m.content, m.activeSwipeIndex ?? 0, record(m.extra).translation])}`);
+      },
+      cancel() {
+        job?.controller.abort();
+      },
+      discard() {
+        if (job?.busy) return;
+        job = void 0;
+        notify({ busy: false, partial: false, text: "\uBD80\uBD84 \uACB0\uACFC \uBC84\uB9BC \xB7 \uAE30\uC874 \uBC88\uC5ED \uC720\uC9C0" });
+      },
+      async savePartial() {
+        const j = job;
+        if (!j || j.busy || !j.parts.length || !active(j)) return;
+        j.controller = new window2.AbortController();
+        j.busy = true;
+        emit(j, "\uBD80\uBD84 \uACB0\uACFC \uC800\uC7A5 \uC911", true);
+        try {
+          await persist(j);
+        } catch (error) {
+          emit(j, error instanceof Error ? error.message : "\uC800\uC7A5 \uC2E4\uD328 \xB7 \uAE30\uC874 \uBC88\uC5ED \uC720\uC9C0", false);
+        } finally {
+          j.busy = false;
+          if (active(j)) notify({ busy: false, partial: j.parts.length > 0, messageId: j.messageId });
+        }
+      },
+      navigation() {
+        if (job && activeChatId(window2) !== job.chatId) {
+          job.controller.abort();
+          job = void 0;
+          notify({ busy: false, partial: false, text: "\uCC44\uD305 \uC774\uB3D9\uC73C\uB85C \uCDE8\uC18C \xB7 \uAE30\uC874 \uBC88\uC5ED \uC720\uC9C0" });
+        }
+      },
+      dispose() {
+        disposed = true;
+        job?.controller.abort();
+        for (const c of controllers) c.abort();
+        job = void 0;
+        attempted.clear();
+      }
+    };
+  }
+
   // src/runtime.ts
   var KEY = "translation_regex_me";
   var BASE_CSS = `:host{display:block;min-width:0;max-width:100%;contain:layout style paint;isolation:isolate}
@@ -9091,11 +9621,14 @@
     const mounted = /* @__PURE__ */ new Map();
     const life = new window2.AbortController();
     const choices = /* @__PURE__ */ new Map(), intents = /* @__PURE__ */ new Map(), requested = /* @__PURE__ */ new Set();
-    const settings = { enabled: false, conversation: false };
+    const settings = { enabled: false, conversation: false, autoContinue: false, showLauncher: true };
+    const savedTranslations = /* @__PURE__ */ new Map();
     try {
       const saved = JSON.parse(window2.localStorage.getItem(`${KEY}.settings`) || "{}");
       settings.enabled = saved.autoApply === true;
       settings.conversation = saved.conversation === true;
+      settings.autoContinue = saved.autoContinue === true;
+      settings.showLauncher = saved.showLauncher !== false;
     } catch {
     }
     const el = (tag, text2) => {
@@ -9105,36 +9638,41 @@
     };
     const ui = el("div");
     ui.id = KEY;
+    ui.hidden = true;
     const shadow = ui.attachShadow({ mode: "open" }), style = el("style");
-    style.textContent = `:host{position:fixed;right:12px;bottom:12px;z-index:1000;font:14px/1.5 system-ui;color:#eee;max-width:calc(100vw - 24px)}
+    style.textContent = `:host{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;padding:12px;background:#0006;font:14px/1.5 system-ui;color:#eee}:host([hidden]){display:none!important}
 *{box-sizing:border-box}button{font:inherit;color:inherit;background:#303444;border:1px solid #6c7185;border-radius:8px;padding:8px 12px;cursor:pointer}
-section{background:#222633;border:1px solid #6c7185;border-radius:12px;padding:12px;width:300px;max-width:calc(100vw - 24px);max-height:70vh;overflow:auto;margin-bottom:8px;overflow-wrap:anywhere}
-[hidden]{display:none!important}label{display:flex;align-items:flex-start;gap:8px;margin:12px 0}input{flex:none;width:18px;height:18px}p{font-size:12px;margin:8px 0}h2{font-size:15px;margin:0 0 10px}`;
+section{display:flex;flex-direction:column;background:#222633;border:1px solid #6c7185;border-radius:12px;padding:12px;width:320px;max-width:calc(100vw - 24px);max-height:70vh;max-height:min(70dvh,calc(100dvh - 96px));overflow:hidden;overflow-wrap:anywhere}
+header{display:flex;align-items:center;justify-content:space-between;gap:8px;flex:none}header button{min-width:44px;min-height:44px;flex:none}.settings-body{overflow:auto;min-height:0}
+[hidden]{display:none!important}label{display:flex;align-items:flex-start;gap:8px;margin:12px 0}input{flex:none;width:18px;height:18px}p{font-size:12px;margin:8px 0}h2{font-size:15px;margin:0}`;
     const panel = el("section");
     panel.hidden = true;
     panel.id = "settings";
     panel.setAttribute("aria-label", "\uBC88\uC5ED\uBB38 \uC815\uADDC\uC2DD \uC124\uC815");
-    const toggle = el("button", "\uBC88\uC5ED \uC815\uADDC\uC2DD");
-    toggle.type = "button";
-    toggle.setAttribute("aria-expanded", "false");
-    toggle.setAttribute("aria-controls", "settings");
+    panel.setAttribute("role", "dialog");
+    panel.setAttribute("aria-modal", "true");
     const close = el("button", "\uB2EB\uAE30");
     close.type = "button";
     const status = el("p", "\uC218\uB3D9 \uC2E4\uD589 \xB7 \uBA54\uC2DC\uC9C0\uC758 \uC810\uC120 \uD050\uBE0C \uBC84\uD2BC\uC744 \uB204\uB974\uC138\uC694");
     status.setAttribute("role", "status");
-    panel.append(el("h2", "\uBC88\uC5ED\uBB38 \uD45C\uC2DC \uC815\uADDC\uC2DD"));
-    const inputs = {};
-    for (const [key, title] of [["enabled", "\uBC88\uC5ED\uBB38\uC5D0 \uC790\uB3D9 \uC801\uC6A9 (\uAE30\uBCF8 \uAEBC\uC9D0)"], ["conversation", "\uB300\uD654 \uBAA8\uB4DC\uC5D0\uB3C4 \uC801\uC6A9 (\uC6D0\uBB38 \uBC88\uC5ED\uB9CC)"]]) {
+    const header = el("header"), content = el("div");
+    content.className = "settings-body";
+    header.append(el("h2", "\uBC88\uC5ED\uBB38 \uD45C\uC2DC \uC815\uADDC\uC2DD"), close);
+    panel.append(header, content);
+    for (const [key, title] of [["enabled", "\uBC88\uC5ED\uBB38\uC5D0 \uC790\uB3D9 \uC801\uC6A9 (\uAE30\uBCF8 \uAEBC\uC9D0)"], ["conversation", "\uB300\uD654 \uBAA8\uB4DC\uC5D0\uB3C4 \uC801\uC6A9 (\uC6D0\uBB38 \uBC88\uC5ED\uB9CC)"], ["autoContinue", "\uBC88\uC5ED\uC774 \uB04A\uACBC\uC73C\uBA74 \uC790\uB3D9\uC73C\uB85C \uC774\uC5B4\uC11C (\uAE30\uBCF8 \uAEBC\uC9D0)"], ["showLauncher", "\uD50C\uB85C\uD305 \uB7F0\uCC98 \uD45C\uC2DC"]]) {
       const label = el("label"), input = el("input");
       input.type = "checkbox";
       input.checked = settings[key];
       input.id = key;
-      inputs[key] = input;
       input.addEventListener("change", () => {
         settings[key] = input.checked;
         try {
-          window2.localStorage.setItem(`${KEY}.settings`, JSON.stringify({ autoApply: settings.enabled, conversation: settings.conversation }));
+          window2.localStorage.setItem(`${KEY}.settings`, JSON.stringify({ autoApply: settings.enabled, conversation: settings.conversation, autoContinue: settings.autoContinue, showLauncher: settings.showLauncher }));
         } catch {
+        }
+        if (key === "showLauncher") {
+          launcher.setShown(settings.showLauncher);
+          return;
         }
         choices.clear();
         intents.clear();
@@ -9142,33 +9680,104 @@ section{background:#222633;border:1px solid #6c7185;border-radius:12px;padding:1
         invalidate(true);
       }, { signal: life.signal });
       label.append(input, el("span", title));
-      panel.append(label);
+      content.append(label);
     }
-    panel.append(el("p", "\uB300\uD654 \uBAA8\uB4DC\uC5D0\uC11C \uC774\uBBF8 \uAC00\uACF5\uD55C HTML\uC744 \uBC88\uC5ED\uD55C \uACBD\uC6B0\uC5D0\uB294 \uC911\uBCF5 \uC801\uC6A9\uC744 \uD53C\uD558\uAE30 \uC704\uD574 \uC6D0\uB798 \uBC88\uC5ED\uBB38\uC744 \uD45C\uC2DC\uD569\uB2C8\uB2E4."));
+    content.append(el("p", "\uB300\uD654 \uBAA8\uB4DC\uC5D0\uC11C \uC774\uBBF8 \uAC00\uACF5\uD55C HTML\uC744 \uBC88\uC5ED\uD55C \uACBD\uC6B0\uC5D0\uB294 \uC911\uBCF5 \uC801\uC6A9\uC744 \uD53C\uD558\uAE30 \uC704\uD574 \uC6D0\uB798 \uBC88\uC5ED\uBB38\uC744 \uD45C\uC2DC\uD569\uB2C8\uB2E4."));
     const refresh = el("button", "\uADDC\uCE59 \uC0C8\uB85C\uACE0\uCE68");
     refresh.type = "button";
     refresh.addEventListener("click", () => invalidate(true), { signal: life.signal });
-    panel.append(refresh, status, close);
-    shadow.append(style, panel, toggle);
+    const translationMenu = el("div"), jobStatus = el("p"), partialHelp = el("p", "\uBD80\uBD84 \uACB0\uACFC \uC800\uC7A5\uC740 \uAE30\uC874 \uBC88\uC5ED\uC744 \uC644\uB8CC\uB41C \uCCAD\uD06C\uAE4C\uC9C0\uC758 \uBC88\uC5ED\uC73C\uB85C \uBC14\uAFC9\uB2C8\uB2E4.");
+    partialHelp.hidden = true;
+    jobStatus.setAttribute("role", "status");
+    const resume = el("button", "\uC774\uC5B4\uC11C \uBC88\uC5ED"), split = el("button", "\uB098\uB220\uC11C \uB2E4\uC2DC \uBC88\uC5ED");
+    const cancel = el("button", "\uCDE8\uC18C"), keep = el("button", "\uBD80\uBD84 \uACB0\uACFC \uC800\uC7A5"), discard = el("button", "\uBD80\uBD84 \uACB0\uACFC \uBC84\uB9AC\uAE30");
+    resume.id = "continue-translation";
+    split.id = "split-translation";
+    cancel.id = "cancel-translation";
+    keep.id = "save-partial";
+    discard.id = "discard-partial";
+    cancel.hidden = keep.hidden = discard.hidden = true;
+    translationMenu.append(resume, split, cancel, keep, discard, partialHelp, jobStatus);
+    content.append(status, translationMenu, refresh);
+    shadow.append(style, panel);
     document2.body.append(ui);
-    function closePanel() {
-      panel.hidden = true;
-      toggle.setAttribute("aria-expanded", "false");
-      toggle.focus();
+    let opener, panelChatId;
+    const launcher = createLauncher(window2, (button) => {
+      if (ui.hidden) openPanel(button);
+      else closePanel();
+    }, settings.showLauncher);
+    function openPanel(button) {
+      opener = button;
+      panelChatId = activeChatId(window2);
+      ui.hidden = false;
+      panel.hidden = false;
+      translationMenu.hidden = !button?.closest("[data-message-id]");
+      launcher.button.setAttribute("aria-expanded", "true");
+      close.focus({ preventScroll: true });
     }
-    toggle.addEventListener("click", () => {
-      panel.hidden = !panel.hidden;
-      toggle.setAttribute("aria-expanded", String(!panel.hidden));
-      if (!panel.hidden) inputs.enabled.focus();
-    }, { signal: life.signal });
+    function closePanel() {
+      ui.hidden = true;
+      panel.hidden = true;
+      launcher.button.setAttribute("aria-expanded", "false");
+      if (opener?.isConnected) opener.focus({ preventScroll: true });
+      opener = void 0;
+    }
     close.addEventListener("click", closePanel, { signal: life.signal });
-    panel.addEventListener("keydown", (e) => {
+    ui.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (e.composedPath()[0] === ui) closePanel();
+    }, { signal: life.signal });
+    for (const type of ["pointerdown", "touchstart", "contextmenu"]) ui.addEventListener(type, (e) => e.stopPropagation(), { signal: life.signal });
+    document2.addEventListener("keydown", (e) => {
+      if (ui.hidden) return;
       if (e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();
         closePanel();
       }
+      if (e.key === "Tab") {
+        const controls = [...panel.querySelectorAll("button,input")].filter((n) => !n.closest("[hidden]") && !n.disabled), index = controls.indexOf(shadow.activeElement);
+        if (index === -1 || !e.shiftKey && index === controls.length - 1 || e.shiftKey && index === 0) {
+          e.preventDefault();
+          controls[e.shiftKey ? controls.length - 1 : 0].focus();
+        }
+      }
+    }, { capture: true, signal: life.signal });
+    document2.addEventListener("focusin", (e) => {
+      if (!ui.hidden && !e.composedPath().includes(ui)) close.focus({ preventScroll: true });
     }, { signal: life.signal });
+    const jobs = createTranslationJobs(api, window2, (state) => {
+      if (state.text !== void 0) jobStatus.textContent = state.text;
+      partialHelp.hidden = !state.partial;
+      cancel.hidden = !state.busy;
+      keep.hidden = discard.hidden = !state.partial;
+      resume.disabled = split.disabled = state.busy || state.partial;
+      keep.disabled = discard.disabled = state.busy;
+      if (state.messageId) actions.state(state.messageId, state.busy ? "busy" : "idle", state.text || jobStatus.textContent);
+    }, (job, text2) => {
+      savedTranslations.set(job.messageId, text2);
+      intents.set(job.messageId, true);
+      requested.add(job.messageId);
+      invalidate(true);
+      try {
+        Promise.resolve(window2.__MARINARA_HOST__?.queryClient?.invalidateQueries?.({ queryKey: ["chats", "messages", job.chatId] })).catch(() => {
+        });
+      } catch {
+      }
+    });
+    for (const [button, mode] of [[resume, "continue"], [split, "split"]]) {
+      button.type = "button";
+      button.addEventListener("click", () => {
+        const id = opener?.closest("[data-message-id]")?.getAttribute("data-message-id");
+        if (id && panelChatId === activeChatId(window2)) void jobs.execute(id, mode);
+        else jobStatus.textContent = "\uCC44\uD305\uC774 \uBCC0\uACBD\uB418\uC5C8\uC2B5\uB2C8\uB2E4 \xB7 \uD604\uC7AC \uBA54\uC2DC\uC9C0\uC758 \uD050\uBE0C \uBA54\uB274\uB97C \uB2E4\uC2DC \uC5EC\uC138\uC694";
+      }, { signal: life.signal });
+    }
+    cancel.addEventListener("click", () => jobs.cancel(), { signal: life.signal });
+    keep.addEventListener("click", () => {
+      void jobs.savePartial();
+    }, { signal: life.signal });
+    discard.addEventListener("click", () => jobs.discard(), { signal: life.signal });
     const actions = createActions(window2, (messageId) => {
       const wanted = actions.kind(messageId) === "error" || !requested.has(messageId);
       intents.set(messageId, wanted);
@@ -9176,7 +9785,7 @@ section{background:#222633;border:1px solid #6c7185;border-radius:12px;padding:1
       else requested.delete(messageId);
       invalidate(true);
       actions.state(messageId, wanted ? "busy" : "idle", wanted ? "\uC801\uC6A9 \uC911" : "\uC6D0\uB798 \uBC88\uC5ED\uBB38 \uD45C\uC2DC");
-    });
+    }, openPanel);
     function observe() {
       if (!disposed) observer.observe(document2.body, {
         childList: true,
@@ -9228,11 +9837,19 @@ section{background:#222633;border:1px solid #6c7185;border-radius:12px;padding:1
     function relevant(m) {
       const target = m.target.nodeType === 1 ? m.target : m.target.parentElement;
       if (target?.closest?.(`[data-${KEY}],[data-translation-regex-action],#${KEY}`)) return false;
+      if (target?.closest?.("[data-translation-polisher-ui]") && !target.closest(".translation-text,.mari-message-content")) return false;
+      const node = target?.closest?.(".translation-text,.mari-message-content");
+      const old = mounted.get(node);
+      if (old && fingerprint(node) === old.fingerprint && node.nextSibling === old.wrapper && node.style.getPropertyValue("display") === "none") return false;
       if (target?.closest?.("[data-message-id],.translation-text")) return true;
       return [...m.addedNodes || [], ...m.removedNodes || []].some((n) => n.nodeType === 1 && (n.matches?.(".translation-text,[data-message-id]") || n.querySelector?.(".translation-text,[data-message-id]")));
     }
     const observer = new window2.MutationObserver((records) => {
-      if (records.some(relevant) || [...mounted].some(([n, s]) => !n.isConnected || !s.wrapper.isConnected)) invalidate();
+      if (records.some(relevant) || [...mounted].some(([n, s]) => !n.isConnected || !s.wrapper.isConnected)) {
+        epoch++;
+        data.invalidate();
+        schedule();
+      }
     });
     function connect() {
       const host = window2.__MARINARA_HOST__;
@@ -9273,9 +9890,11 @@ section{background:#222633;border:1px solid #6c7185;border-radius:12px;padding:1
       let version = epoch;
       try {
         connect();
+        jobs.navigation();
         const id = activeChatId(window2);
         if (id !== currentId) {
           currentId = id;
+          savedTranslations.clear();
           choices.clear();
           intents.clear();
           requested.clear();
@@ -9292,13 +9911,14 @@ section{background:#222633;border:1px solid #6c7185;border-radius:12px;padding:1
           status.textContent = "\uD65C\uC131 \uCC44\uD305 \uC5C6\uC74C";
           return;
         }
+        if (jobs.busy) return;
         const roots = [...document2.querySelectorAll("[data-message-id]")];
         if (!roots.length) {
           restoreAll();
           status.textContent = "\uD45C\uC2DC\uB41C \uBA54\uC2DC\uC9C0 \uC5C6\uC74C";
           return;
         }
-        if (!settings.enabled && !requested.size && !intents.size && ![...choices.values()].some(Boolean)) {
+        if (!settings.enabled && !settings.autoContinue && !requested.size && !intents.size && ![...choices.values()].some(Boolean)) {
           restoreAll();
           for (const mid of actions.ids()) actions.state(mid, "idle");
           status.textContent = "\uC218\uB3D9 \uC2E4\uD589 \xB7 \uBA54\uC2DC\uC9C0\uC758 \uC810\uC120 \uD050\uBE0C \uBC84\uD2BC\uC744 \uB204\uB974\uC138\uC694";
@@ -9307,7 +9927,7 @@ section{background:#222633;border:1px solid #6c7185;border-radius:12px;padding:1
         version = epoch;
         const candidates = roots.flatMap((root2) => [...root2.querySelectorAll(".translation-text,.mari-message-content")]).filter((node) => !node.hasAttribute(`data-${KEY}`));
         const stamps = new Map(candidates.map((node) => [node, fingerprint(node)]));
-        for (const mid of requested) actions.state(mid, "busy", "\uC801\uC6A9 \uC911");
+        if (!jobs.busy) for (const mid of requested) actions.state(mid, "busy", "\uC801\uC6A9 \uC911");
         const state = store?.getState?.();
         if (state?.isStreaming && (!state.streamingChatId || state.streamingChatId === id)) {
           restoreAll();
@@ -9328,6 +9948,7 @@ section{background:#222633;border:1px solid #6c7185;border-radius:12px;padding:1
         }
         const snapshot = await data.snapshot(id);
         if (!current(version, id)) return;
+        if (jobs.busy) return;
         const { chat, messages, rules, presets } = snapshot;
         if (chat.mode !== "roleplay" && !(chat.mode === "conversation" && settings.conversation)) {
           restoreAll();
@@ -9357,6 +9978,12 @@ section{background:#222633;border:1px solid #6c7185;border-radius:12px;padding:1
             choices.set(key, intents.get(messageId));
             intents.delete(messageId);
           }
+          const messageExtra = record(message.extra);
+          if (settings.autoContinue && !messageExtra.translationHidden && sourceMatches(message) && typeof messageExtra.translation === "string" && truncation(message.content, messageExtra.translation).suspected && jobs.canAuto(id, message)) {
+            void jobs.execute(messageId, "continue", true);
+            return;
+          }
+          if (jobs.busy) continue;
           const wanted = choices.get(key) ?? settings.enabled;
           if (wanted) requested.add(messageId);
           else requested.delete(messageId);
@@ -9374,16 +10001,16 @@ section{background:#222633;border:1px solid #6c7185;border-radius:12px;padding:1
             skip("\uC228\uAE34 \uBC88\uC5ED\uBB38 \xB7 \uC6D0\uB798 \uD45C\uC2DC \uC720\uC9C0");
             continue;
           }
-          if (chat.mode === "roleplay" && typeof extra.translationSource === "string" && extra.translationSource !== message.content) {
+          if (chat.mode === "roleplay" && typeof extra.translationSource === "string" && !sourceMatches(message, extra)) {
             skip("\uD604\uC7AC \uC2A4\uC640\uC774\uD504\uC640 \uBC88\uC5ED \uC6D0\uBB38 \uBD88\uC77C\uCE58");
             continue;
           }
-          if (chat.mode === "conversation" && extra.translationSource !== message.content) {
+          if (chat.mode === "conversation" && !sourceMatches(message, extra)) {
             skip("\uAC00\uACF5\uB41C HTML \uB610\uB294 \uCD9C\uCC98 \uBBF8\uD655\uC778 \uBC88\uC5ED \xB7 \uC911\uBCF5 \uC801\uC6A9 \uBC29\uC9C0");
             continue;
           }
           const separate = [...root2.querySelectorAll(".translation-text")].filter((n) => n.closest("[data-message-id]") === root2);
-          const inline = record(chat.metadata).translationDisplayOnly === true && extra.translationSource === message.content;
+          const inline = record(chat.metadata).translationDisplayOnly === true && sourceMatches(message, extra);
           const nodes = separate.length ? separate : inline ? [...root2.querySelectorAll(".mari-message-content")].filter((n) => !n.hasAttribute(`data-${KEY}`) && n.closest("[data-message-id]") === root2) : [];
           if (nodes.length !== 1 || root2.querySelector("textarea,[contenteditable=true]")) {
             skip("\uC9C0\uC6D0\uD558\uB294 \uBC88\uC5ED \uD45C\uC2DC \uC601\uC5ED \uC5C6\uC74C");
@@ -9396,6 +10023,10 @@ section{background:#222633;border:1px solid #6c7185;border-radius:12px;padding:1
           }
           if (!separate.length && node.querySelector("button,input,select,video,audio")) {
             skip("\uC0C1\uD638\uC791\uC6A9 \uBCF8\uBB38 \xB7 \uC6D0\uB798 \uD45C\uC2DC \uC720\uC9C0");
+            continue;
+          }
+          if (node.querySelector("[data-translation-polisher-ui]")) {
+            skip("\uB2E4\uB4EC\uAE30 UI\uAC00 \uD3EC\uD568\uB41C \uBC88\uC5ED \uC601\uC5ED \xB7 \uC6D0\uB798 \uD45C\uC2DC \uC720\uC9C0");
             continue;
           }
           if (!stamps.has(node)) {
@@ -9413,7 +10044,7 @@ section{background:#222633;border:1px solid #6c7185;border-radius:12px;padding:1
             promptPresetId: chat.promptPresetId
           }), quoteFormat(window2)));
           if (!current(version, id) || !node.isConnected || fingerprint(node) !== stamps.get(node)) continue;
-          if (output === raw) {
+          if (output === raw && savedTranslations.get(messageId) !== raw) {
             quiet(() => release(node));
             skip("\uC801\uC6A9\uD560 \uADDC\uCE59 \uC5C6\uC74C \xB7 \uC6D0\uB798 \uBC88\uC5ED\uBB38 \uD45C\uC2DC");
             continue;
@@ -9442,7 +10073,7 @@ section{background:#222633;border:1px solid #6c7185;border-radius:12px;padding:1
             release(node);
             const old = { display: node.style.getPropertyValue("display"), priority: node.style.getPropertyPriority("display"), hadStyle: node.hasAttribute("style") };
             node.after(wrapper);
-            mounted.set(node, { ...old, wrapper, signature });
+            mounted.set(node, { ...old, wrapper, signature, fingerprint: fingerprint(node) });
             node.style.setProperty("display", "none", "important");
           });
           count++;
@@ -9474,10 +10105,12 @@ section{background:#222633;border:1px solid #6c7185;border-radius:12px;padding:1
       window2.clearTimeout(timer);
       window2.clearInterval(interval);
       life.abort();
+      jobs.dispose();
       offStore?.();
       offQuery?.();
       data.dispose();
       for (const node of mounted.keys()) release(node);
+      launcher.dispose();
       actions.dispose();
       choices.clear();
       intents.clear();

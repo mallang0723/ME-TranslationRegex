@@ -26,7 +26,12 @@ export async function harness(options = {}) {
   if (options.store !== false) w.__MARINARA_HOST__ = { stores: { chat: { getState: () => state, subscribe(fn) { callbacks.add(fn); return () => callbacks.delete(fn); } } } };
   const fetch = async (path, init) => {
     requests.push({ path, init });
-    if (!path.startsWith('/api/') || init.method !== 'GET') throw Error('Forbidden request');
+    if (!path.startsWith('/api/')) throw Error('Forbidden request');
+    if (init.method !== 'GET') {
+      if (!fixture.write) throw Error('Unexpected write request');
+      const result = await fixture.write(path, init);
+      return result ?? { ok: true, json: async () => ({}) };
+    }
     const respond = () => {
       if (fixture.fail || init.signal?.aborted) throw Error('Fake failure');
       const routes = { '/api/chats/c': fixture.chat, '/api/chats/c/messages': fixture.messages, '/api/regex-scripts': fixture.rules,
