@@ -7,14 +7,15 @@ import { packageZip } from '../scripts/package.mjs';
 import { harness } from './harness.mjs';
 test('manifest matches personal extension precedent and required permission/runtime/key', () => {
   const m = JSON.parse(readFileSync('manifest.json')); assert.equal(m.kind, 'marinara.personal-extension');
-  assert.equal(m.version, 1); assert.equal(m.config.version, '0.3.1');
-  assert.equal(JSON.parse(readFileSync('package.json')).version, '0.3.1'); assert.equal(m.config.runtime, 'client'); assert.equal(m.config.jsPath, 'extension.js');
+  assert.equal(m.version, 1); assert.equal(m.config.version, '0.3.2');
+  assert.equal(JSON.parse(readFileSync('package.json')).version, '0.3.2'); assert.equal(m.config.runtime, 'client'); assert.equal(m.config.jsPath, 'extension.js');
   assert.deepEqual(m.config.capabilities, ['full_page_access']); assert.equal(m.config.enabled, false);
   assert.ok(m.config.description.includes('translation_regex_me'));
 });
 test('all reference snapshots match recorded upstream SHA-256', () => {
   for (const [path, hash] of Object.entries(JSON.parse(readFileSync('vendor/UPSTREAM.json'))))
-    assert.equal(createHash('sha256').update(readFileSync('vendor/upstream/' + path.split('/').pop())).digest('hex'), hash, path);
+    assert.equal(createHash('sha256').update(readFileSync(path.includes('/features/')
+      ? 'vendor/' + path.slice('shared/src/'.length) : 'vendor/upstream/' + path.split('/').pop())).digest('hex'), hash, path);
 });
 test('repository-root GitHub install files match dist byte for byte', () => {
   for (const name of ['manifest.json', 'extension.js']) assert.deepEqual(readFileSync(name), readFileSync(`dist/${name}`));

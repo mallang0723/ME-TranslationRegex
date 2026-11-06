@@ -1,7 +1,7 @@
 translation_regex_me — 마리나라 번역문 표시 정규식 개인 확장 (AGPL-3.0-or-later)
 
 Marinara Engine의 정규식/매크로/인용부호/CSS 처리 및 HTML 허용 목록을 재사용했습니다.
-원본: marinara-engine (v2.5.1) packages (vendor/UPSTREAM.json 참고).
+원본: marinara-engine (v2.5.2) packages (vendor/UPSTREAM.json 참고).
 로컬 변경: React 훅 제거, 독립 실행 연결, 추가 리소스 차단. 원본 라이선스 전문:
 
                     GNU AFFERO GENERAL PUBLIC LICENSE

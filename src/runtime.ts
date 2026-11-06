@@ -156,7 +156,9 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
   }
   const observer = new window.MutationObserver((records: any[]) => {
     if (records.some(relevant) || [...mounted].some(([n, s]) => !n.isConnected || !s.wrapper.isConnected)) {
-      epoch++; data.invalidate(); schedule();
+      // A swipe/stream can replace React's prose before the API request completes.
+      // Drop our old rendering now, rather than leaving it over the new host body.
+      epoch++; data.invalidate(); restoreAll(); schedule();
     }
   });
   function connect() {
@@ -250,13 +252,15 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
         const extra = record(swipe.extra), raw = extra.translation;
         if (typeof raw !== 'string' || !raw) { skip('API에 저장된 번역문 없음 · 다음 확인 때 재시도'); continue; }
         if (extra.translationHidden === true) { skip('숨긴 번역문 · 원래 표시 유지'); continue; }
-        if (chat.mode === 'roleplay' && typeof extra.translationSource === 'string' && !sourceMatches(message, extra)) {
+        // ChatMessage.tsx:2220-2223: undefined supports legacy separate translations;
+        // every defined source (including null/malformed values) must match exactly.
+        if (extra.translationSource !== undefined && !sourceMatches(message, extra)) {
           skip('현재 스와이프와 번역 원문 불일치'); continue;
         }
         // ConversationMessage.tsx:396-405,765 translates renderedContent (already processed).
         if (chat.mode === 'conversation' && !sourceMatches(message, extra)) { skip('가공된 HTML 또는 출처 미확인 번역 · 중복 적용 방지'); continue; }
         const separate = [...root.querySelectorAll('.translation-text')].filter((n: any) => n.closest('[data-message-id]') === root);
-        // ChatMessage.tsx:3329-3345,3516-3546: translationDisplayOnly replaces prose
+        // ChatMessage.tsx:3509-3517: translationDisplayOnly replaces prose
         // inside mari-message-content and OMITs translation-text. API must be read BEFORE DOM selection.
         // ConversationMessage.tsx:455-461 also replaces prose; the raw-source guard above still applies.
         const inline = record(chat.metadata).translationDisplayOnly === true && sourceMatches(message, extra);
@@ -272,7 +276,11 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
           n.querySelector('span') && !n.querySelector('.translation-text'))) {
           skip('번역 진행 중 · 원래 표시 유지'); continue;
         }
-        // ChatMessage.tsx:3341-3345 can append interactive command results; never hide those.
+        // 2.5.2 appends all inline command results after translated prose, including
+        // noninteractive dice/artifacts. Leave the host body intact, in host order.
+        if (!separate.length && node.querySelector('[data-roleplay-inline-roll],[data-roleplay-whisper],[data-roleplay-inline-illustration],[data-roleplay-artifact]')) {
+          skip('명령 결과가 포함된 번역 본문 · 원래 표시 유지'); continue;
+        }
         if (!separate.length && node.querySelector('button,input,select,video,audio')) {
           skip('상호작용 본문 · 원래 표시 유지'); continue;
         }

@@ -4436,6 +4436,8 @@
       const close = source.indexOf("}", i + 3);
       return close === -1 ? null : close + 1;
     }
+    if (next === "x" && /^[0-9a-f]{2}$/i.test(source.slice(i + 2, i + 4))) return i + 4;
+    if (next === "u" && /^[0-9a-f]{4}$/i.test(source.slice(i + 2, i + 6))) return i + 6;
     return i + 2;
   }
   function getGroupBodyStart(source, openIdx) {
@@ -4453,7 +4455,6 @@
   function findCharClassClose(source, openIdx) {
     let j = openIdx + 1;
     if (source[j] === "^") j += 1;
-    if (source[j] === "]") j += 1;
     while (j < source.length) {
       const c = source[j];
       if (c === "\\") {
@@ -4468,13 +4469,16 @@
   function hasUnsafeQuantifiedAlternation(body) {
     const alternatives = splitTopLevelAlternatives(body);
     if (alternatives.length < 2) return false;
-    const tokenized = alternatives.map(tokenizeAlternative);
+    const characters = /* @__PURE__ */ new Map();
+    const tokenized = alternatives.map((alternative) => {
+      const tokens = tokenizeAlternative(alternative);
+      const uncertain = tokens.findIndex((token) => readTokenCharacterSet(token.source, characters) === null);
+      return uncertain === -1 ? tokens : tokens.slice(0, uncertain);
+    });
     if (tokenized.some((tokens) => tokens.length === 0)) return true;
     for (let i = 0; i < tokenized.length; i += 1) {
       for (let j = i + 1; j < tokenized.length; j += 1) {
-        const a = tokenized[i];
-        const b = tokenized[j];
-        if (isTokenPrefix(a, b) || isTokenPrefix(b, a)) return true;
+        if (haveOverlappingPrefixes(tokenized[i], tokenized[j], characters)) return true;
       }
     }
     return false;
@@ -4521,27 +4525,115 @@
       if (c === "\\") {
         const end = consumeEscapedAtom(alternative, i);
         if (end === null) return tokens;
-        tokens.push(alternative.slice(i, end));
+        tokens.push({ source: alternative.slice(i, end), optional: false });
         i = end - 1;
         continue;
       }
       if (c === "[") {
         const close = findCharClassClose(alternative, i);
         if (close === -1) return tokens;
-        tokens.push(alternative.slice(i, close + 1));
+        tokens.push({ source: alternative.slice(i, close + 1), optional: false });
         i = close;
         continue;
       }
-      if ("(){}*+?|^$.".includes(c)) {
+      if (c === "?") {
+        const previous = tokens.at(-1);
+        if (previous) previous.optional = true;
+        if (alternative[i + 1] === "?") i += 1;
+        continue;
+      }
+      if ("(){}*+|^$.".includes(c)) {
         return tokens;
       }
-      tokens.push(c);
+      tokens.push({ source: c, optional: false });
     }
     return tokens;
   }
-  function isTokenPrefix(prefix, candidate) {
-    if (prefix.length > candidate.length) return false;
-    return prefix.every((token, index) => candidate[index] === token);
+  function haveOverlappingPrefixes(left, right, characters) {
+    const width = right.length + 1;
+    const pending = [0];
+    const visited = /* @__PURE__ */ new Set();
+    while (pending.length > 0) {
+      const state = pending.pop();
+      if (visited.has(state)) continue;
+      visited.add(state);
+      const i = Math.floor(state / width);
+      const j = state % width;
+      if (i === left.length || j === right.length) return true;
+      const a = left[i];
+      const b = right[j];
+      if (a.optional) pending.push((i + 1) * width + j);
+      if (b.optional) pending.push(i * width + j + 1);
+      if (tokensMayOverlap(a.source, b.source, characters)) pending.push((i + 1) * width + j + 1);
+    }
+    return false;
+  }
+  function tokensMayOverlap(token, other, characters) {
+    if (token === other) return true;
+    const left = readTokenCharacterSet(token, characters);
+    const right = readTokenCharacterSet(other, characters);
+    if (left === null || right === null) return true;
+    if (left.negated && right.negated) return true;
+    if (left.negated || right.negated) {
+      const included = left.negated ? right.exact : left.exact;
+      const excluded = left.negated ? left.exact : right.exact;
+      for (const c of included) if (!excluded.has(c)) return true;
+      return false;
+    }
+    for (const c of left.folded) if (right.folded.has(c)) return true;
+    return false;
+  }
+  function readTokenCharacterSet(token, cache) {
+    const cached = cache.get(token);
+    if (cached !== void 0) return cached;
+    const negatedClass = token.startsWith("[^");
+    const negatedEscape = /^\\[DSW]$/.test(token);
+    const positiveToken = negatedClass ? removeClassNegation(token) : negatedEscape ? token.toLowerCase() : token;
+    const characters = readTokenCharacters(positiveToken);
+    const result = characters === null ? null : {
+      exact: new Set(characters.split("")),
+      folded: new Set((characters + characters.toUpperCase() + characters.toLowerCase()).split("")),
+      negated: negatedClass || negatedEscape
+    };
+    cache.set(token, result);
+    return result;
+  }
+  function removeClassNegation(token) {
+    return `[${token[2] === "^" ? "\\" : ""}${token.slice(2)}`;
+  }
+  function readTokenCharacters(token) {
+    if (token === "\\d") return "0123456789";
+    if (token === "\\w") return "0123456789_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    if (token === "\\s")
+      return "	\n\v\f\r \xA0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF";
+    if (!token.startsWith("[") || !token.endsWith("]") || token.startsWith("[^")) {
+      return readRequiredLiteral(token);
+    }
+    const body = token.slice(1, -1);
+    let characters = "";
+    for (let i = 0; i < body.length; ) {
+      if (body[i] === "[" || body.startsWith("&&", i) || body.startsWith("--", i)) return null;
+      const end = body[i] === "\\" ? consumeEscapedAtom(body, i) : i + 1;
+      if (end === null) return null;
+      const atom = body.slice(i, end);
+      const start2 = atom === "\\b" ? "\b" : readTokenCharacters(atom);
+      if (start2 === null) return null;
+      if (body[end] === "-" && end + 1 < body.length) {
+        const rangeEnd = body[end + 1] === "\\" ? consumeEscapedAtom(body, end + 1) : end + 2;
+        if (rangeEnd === null) return null;
+        const last = readRequiredLiteral(body.slice(end + 1, rangeEnd));
+        if (start2.length !== 1 || last === null || last.length !== 1) return null;
+        const lo = start2.charCodeAt(0);
+        const hi = last.charCodeAt(0);
+        if (hi < lo || hi - lo > 255) return null;
+        for (let code = lo; code <= hi; code += 1) characters += String.fromCharCode(code);
+        i = rangeEnd;
+      } else {
+        characters += start2;
+        i = end;
+      }
+    }
+    return characters;
   }
   function hasPolynomialBacktrackingRisk(source, maxRepetition) {
     let broadUnboundedCount = 0;
@@ -4624,16 +4716,23 @@
     return false;
   }
   function readRequiredLiteral(atom) {
-    if (atom.length === 1) return atom;
+    if (atom.length === 1) {
+      const code = atom.charCodeAt(0);
+      return code >= 55296 && code <= 57343 ? null : atom;
+    }
     if (/^\\[\\^$.*+?()[\]{}|/-]$/.test(atom)) return atom[1] ?? null;
+    const escapedControls = { "\\n": "\n", "\\r": "\r", "\\t": "	", "\\v": "\v", "\\f": "\f" };
+    if (escapedControls[atom] !== void 0) return escapedControls[atom];
+    if (/^\\x[0-9a-f]{2}$/i.test(atom) || /^\\u[0-9a-f]{4}$/i.test(atom)) {
+      const code = Number.parseInt(atom.slice(2), 16);
+      return code >= 55296 && code <= 57343 ? null : String.fromCharCode(code);
+    }
     return null;
   }
   function characterClassMatchesLiteral(characterClass, literal) {
-    try {
-      return new RegExp(`^(?:${characterClass})$`).test(literal);
-    } catch {
-      return true;
-    }
+    if (!characterClass.startsWith("[^")) return true;
+    const excluded = readTokenCharacters(removeClassNegation(characterClass));
+    return excluded === null || !excluded.includes(literal);
   }
   function isRequiredLiteralAtom(consumed) {
     return consumed === null || consumed.required;
@@ -4707,6 +4806,26 @@
       targetPromptPresetIds
     };
   }
+  var COMPILED_PATTERN_LIMIT = 500;
+  var compiledPatterns = /* @__PURE__ */ new Map();
+  function compileRegexScriptPattern(source, flags) {
+    const key = `${flags}\0${source}`;
+    if (compiledPatterns.has(key)) return compiledPatterns.get(key);
+    let compiled = null;
+    if (isPatternSafe(source)) {
+      try {
+        compiled = new RegExp(source, flags);
+      } catch {
+        compiled = null;
+      }
+    }
+    if (compiledPatterns.size >= COMPILED_PATTERN_LIMIT) {
+      const oldest = compiledPatterns.keys().next().value;
+      if (oldest !== void 0) compiledPatterns.delete(oldest);
+    }
+    compiledPatterns.set(key, compiled);
+    return compiled;
+  }
   function applyScripts(text2, scripts, placement, options) {
     let result = text2;
     for (const script of scripts) {
@@ -4741,14 +4860,15 @@
       try {
         const findRegex = options?.resolveMacros ? resolveRegexPatternLiteralMacros(script.findRegex, options.resolveMacros) : script.findRegex;
         if (!findRegex) continue;
-        if (!isPatternSafe(findRegex)) continue;
-        const re = new RegExp(findRegex, script.flags);
+        const re = compileRegexScriptPattern(findRegex, script.flags);
+        if (!re) continue;
+        re.lastIndex = 0;
         result = applyRegexReplacement(
           result,
           re,
           script.replaceString,
           (value) => (
-            // packages/client/src/hooks/use-apply-regex.ts:148
+            // packages/client/src/hooks/use-apply-regex.ts:174
             options?.resolveMacros ? options.resolveMacros(value) : value
           )
         );
@@ -4760,6 +4880,39 @@
       }
     }
     return result;
+  }
+
+  // vendor/upstream/dice-notation.ts
+  var DICE_NOTATION_PATTERN = String.raw`\d*d\d+(?:[+-]\d+)?`;
+  var SECURE_DIE_RANGE = 4294967296;
+  var rollDieSecurely = (sides) => {
+    if (!Number.isInteger(sides) || sides < 1 || sides > SECURE_DIE_RANGE) {
+      throw new RangeError(`A die needs at least one whole face, received ${String(sides)}`);
+    }
+    const limit = SECURE_DIE_RANGE - SECURE_DIE_RANGE % sides;
+    const draw = new Uint32Array(1);
+    do
+      globalThis.crypto.getRandomValues(draw);
+    while (draw[0] >= limit);
+    return draw[0] % sides + 1;
+  };
+  function rollParsedDice(parsed, roll = rollDieSecurely) {
+    const rolls = [];
+    for (let index = 0; index < parsed.count; index += 1) {
+      rolls.push(roll(parsed.sides));
+    }
+    const kept = parsed.keep ? keptDice(rolls, parsed.keep) : void 0;
+    const counted = kept ? kept.map((index) => rolls[index]) : rolls;
+    return {
+      notation: parsed.notation,
+      rolls,
+      modifier: parsed.modifier,
+      total: counted.reduce((sum, face) => sum + face, 0) + parsed.modifier,
+      ...kept ? { kept } : {}
+    };
+  }
+  function keptDice(rolls, keep) {
+    return rolls.map((face, index) => ({ face, index })).sort((a, b) => (keep.highest ? b.face - a.face : a.face - b.face) || a.index - b.index).slice(0, keep.count).map(({ index }) => index).sort((a, b) => a - b);
   }
 
   // vendor/upstream/macro-engine.ts
@@ -4872,6 +5025,30 @@
     if (!map || !Object.prototype.hasOwnProperty.call(map, name)) return void 0;
     const value = map[name];
     return typeof value === "string" ? value : void 0;
+  }
+  function worldStateWeekday(state) {
+    let customFields = state?.worldCustomFields;
+    if (typeof customFields === "string") {
+      try {
+        customFields = JSON.parse(customFields);
+      } catch {
+        customFields = [];
+      }
+    }
+    if (Array.isArray(customFields)) {
+      const weekday = customFields.find(
+        (field) => field && typeof field.name === "string" && ["weekday", "dayofweek"].includes(field.name.toLowerCase().replace(/[\s_-]/gu, ""))
+      );
+      if (typeof weekday?.value === "string" && weekday.value.trim()) return weekday.value;
+    }
+    if (typeof state?.date !== "string") return "";
+    const weekdays = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    const named = state.date.match(/\b(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday)\b/iu);
+    if (named) return weekdays.find((day) => day.toLowerCase() === named[1].toLowerCase());
+    const date = state.date.trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/u.test(date)) return "";
+    const parsed = /* @__PURE__ */ new Date(`${date}T00:00:00Z`);
+    return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date ? weekdays[parsed.getUTCDay()] : "";
   }
   function readReasoningMacro(ctx, name) {
     if (readMacroVariable(ctx.variables, name) !== void 0 || ctx.deferredPresetVariableNames?.has(name) || readMacroVariable(ctx.localVariables, name) !== void 0) {
@@ -5232,7 +5409,8 @@
       ctx.personaFields?.personality,
       ctx.personaFields?.backstory,
       ctx.personaFields?.appearance,
-      ctx.personaFields?.scenario
+      ctx.personaFields?.scenario,
+      ctx.personaFields?.example
     ].filter((part) => typeof part === "string" && part.trim().length > 0).join("\n");
   }
   function resolveConditionalOperand(raw, ctx, options) {
@@ -5929,7 +6107,7 @@
     if (/^-?\d+(?:\.\d+)?$/u.test(token)) return token;
     const key = normalizeConditionKey(token);
     if (!PLAN_FIXED_OPERAND_NAMES.has(key)) return null;
-    const group = (ctx.characterProfiles?.length ?? 0) > 1 || ctx.characters.length > 1;
+    const group = (ctx.characterProfiles?.length ?? ctx.characters.length) > 1;
     if (group && PLAN_PER_CHARACTER_OPERAND_NAMES.has(key)) return null;
     return resolveConditionalOperand(raw, ctx, options);
   }
@@ -6327,13 +6505,19 @@
     result = stripMacroComments(result);
     if (ctx.lorebookIncludes) result = expandLorebookIncludes(result, ctx.lorebookIncludes, {}, options);
     let personaText = null;
-    const buildPersonaText = () => [
-      ctx.personaFields?.description,
-      ctx.personaFields?.personality,
-      ctx.personaFields?.backstory,
-      ctx.personaFields?.appearance,
-      ctx.personaFields?.scenario
-    ].map((part) => typeof part === "string" ? resolveNestedFieldMacros(part) : part).filter((part) => typeof part === "string" && part.trim().length > 0).join("\n");
+    const buildPersonaText = () => {
+      const parts = [
+        ctx.personaFields?.description,
+        ctx.personaFields?.personality,
+        ctx.personaFields?.backstory,
+        ctx.personaFields?.appearance,
+        ctx.personaFields?.scenario,
+        ctx.personaFields?.example
+      ].map((part) => typeof part === "string" ? resolveNestedFieldMacros(part) : part);
+      const example = parts[5];
+      if (typeof example === "string") options.onPersonaExampleResolved?.(example);
+      return parts.filter((part) => typeof part === "string" && part.trim().length > 0).join("\n");
+    };
     if (/\{\{persona\}\}/i.test(result)) personaText = buildPersonaText();
     result = expandBracketedCharacterBlocks(result, ctx);
     result = resolveConditionalBlocks(result, ctx, options);
@@ -6439,14 +6623,16 @@
       const hi = Math.max(first, second);
       return String(randomInteger(options, original, lo, hi));
     });
-    result = result.replace(/\{\{roll:(\d+)d(\d+)\}\}/gi, (original, count, sides) => {
+    result = result.replace(/\{\{roll:(\d*)d(\d+)([+-]\d+)?\}\}/gi, (original, count, sides, modifierText) => {
       if (!consumeMacroExpansion(options)) return original;
-      const n = Math.min(parseInt(count, 10), MAX_DICE_COUNT);
+      const n = Math.min(parseInt(count || "1", 10), MAX_DICE_COUNT);
       const s = Math.min(parseInt(sides, 10), MAX_DICE_SIDES);
       if (n < 1 || s < 1) return "0";
-      let total = 0;
-      for (let i = 0; i < n; i++) total += randomInteger(options, `${original}:${i}`, 1, s);
-      return String(total);
+      const modifier = modifierText ? parseInt(modifierText, 10) : 0;
+      if (!Number.isSafeInteger(modifier) || !Number.isSafeInteger(modifier + n * s)) return original;
+      let die = 0;
+      const roll = (faces) => randomInteger(options, `${original}:${die++}`, 1, faces);
+      return String(rollParsedDice({ notation: original, dice: `${n}d${s}`, count: n, sides: s, modifier }, roll).total);
     });
     result = resolveVariableOperationMacros(result, ctx, options);
     result = result.replace(
@@ -6488,6 +6674,11 @@
     result = result.replace(/\{\{lorebooksize::([\w-]+)\}\}/gi, (_, id) => {
       const counts = ctx.lorebookEntryCounts;
       return counts && Object.prototype.hasOwnProperty.call(counts, id) ? String(counts[id]) : "0";
+    });
+    result = result.replace(/\{\{(date|time|weekday)\.world_state\}\}/gi, (_, field) => {
+      if (field.toLowerCase() === "weekday") return worldStateWeekday(ctx.worldState);
+      const value = ctx.worldState?.[field.toLowerCase()];
+      return typeof value === "string" ? value : "";
     });
     if (options.trimResult !== false) {
       result = result.trim();
@@ -6545,16 +6736,23 @@
     persona,
     primaryCharacter,
     characters = [],
+    inactiveCharacterIds,
     userName,
     variables = {},
+    chatVariables,
     lastInput
   }) {
     const fallbackCharacter = primaryCharacter ?? characters[0] ?? null;
+    const inactiveIds = new Set(Array.isArray(inactiveCharacterIds) ? inactiveCharacterIds : []);
     return {
       user: userName ?? persona?.name ?? "User",
       char: fallbackCharacter?.name ?? "Character",
       characters: characters.map((character) => character.name).filter((name) => name.trim().length > 0),
+      groupCharacters: characters.filter((character) => !character.id || !inactiveIds.has(character.id)).map((character) => character.name).filter((name) => name.trim().length > 0),
       variables,
+      // A copy per context: {{setvar}} writes into localVariables, and showing a
+      // message must never change the chat's variables or leak into another message.
+      ...chatVariables ? { localVariables: { ...chatVariables } } : {},
       lastInput,
       characterFields: fallbackCharacter ? {
         description: fallbackCharacter.description ?? "",
@@ -8974,8 +9172,12 @@
           random: () => seededUnitRandom(`${seed}:${block.variableName}`)
         })
       ]));
+      const metadata = record(chat.metadata), storedVariables = metadata.macroVariables;
+      const chatVariables = storedVariables && typeof storedVariables === "object" && !Array.isArray(storedVariables) ? Object.fromEntries(Object.entries(storedVariables).filter(([, value]) => typeof value === "string")) : {};
       const context = {
         variables,
+        chatVariables,
+        inactiveCharacterIds: chat.mode === "roleplay" ? metadata.inactiveCharacterIds : void 0,
         userName: persona?.name ?? (chat.mode === "conversation" ? "User" : "You"),
         persona,
         primaryCharacter,
@@ -9393,7 +9595,7 @@ button[${OWN}][aria-busy=true]::after{animation:translation-regex-pulse .8s infi
     return null;
   }
   function sourceMatches(message, extra = record(message.extra)) {
-    return extra.translationSource === message.content || typeof extra.translationPolisherLongSource === "string" && extra.translationPolisherLongSource.length > 0 && extra.translationPolisherLongSource === message.content;
+    return extra.translationSource === message.content;
   }
   function translationConfig(chat) {
     const meta = record(chat.metadata);
@@ -9848,6 +10050,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
       if (records.some(relevant) || [...mounted].some(([n, s]) => !n.isConnected || !s.wrapper.isConnected)) {
         epoch++;
         data.invalidate();
+        restoreAll();
         schedule();
       }
     });
@@ -10001,7 +10204,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
             skip("\uC228\uAE34 \uBC88\uC5ED\uBB38 \xB7 \uC6D0\uB798 \uD45C\uC2DC \uC720\uC9C0");
             continue;
           }
-          if (chat.mode === "roleplay" && typeof extra.translationSource === "string" && !sourceMatches(message, extra)) {
+          if (extra.translationSource !== void 0 && !sourceMatches(message, extra)) {
             skip("\uD604\uC7AC \uC2A4\uC640\uC774\uD504\uC640 \uBC88\uC5ED \uC6D0\uBB38 \uBD88\uC77C\uCE58");
             continue;
           }
@@ -10019,6 +10222,10 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
           const node = nodes[0];
           if (!separate.length && [...node.parentElement.children].some((n) => n !== node && !n.hasAttribute(`data-${KEY}`) && n.classList.contains("border-t") && n.querySelector("span") && !n.querySelector(".translation-text"))) {
             skip("\uBC88\uC5ED \uC9C4\uD589 \uC911 \xB7 \uC6D0\uB798 \uD45C\uC2DC \uC720\uC9C0");
+            continue;
+          }
+          if (!separate.length && node.querySelector("[data-roleplay-inline-roll],[data-roleplay-whisper],[data-roleplay-inline-illustration],[data-roleplay-artifact]")) {
+            skip("\uBA85\uB839 \uACB0\uACFC\uAC00 \uD3EC\uD568\uB41C \uBC88\uC5ED \uBCF8\uBB38 \xB7 \uC6D0\uB798 \uD45C\uC2DC \uC720\uC9C0");
             continue;
           }
           if (!separate.length && node.querySelector("button,input,select,video,audio")) {

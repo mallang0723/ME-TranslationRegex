@@ -65,11 +65,11 @@ test('continuation uses unique preserved block/exact prefix; ambiguous or mid-ta
   assert.equal(continuationOffset('abc def', 'abc'), 3);
   assert.equal(continuationOffset('<status>test</status> end', '<status>test'), null);
 });
-test('host provider/language/config legacy and reset semantics; polisher source alias is exact', () => {
+test('host provider/language/config legacy and reset semantics; polisher metadata cannot override source', () => {
   assert.deepEqual(translationConfig({ id: 'c', metadata: { translationProvider: 'deepl', translationTargetLang: 'ko',
     translationOutputTargetLang: ' ', translationPrompt: 'legacy', translationOutputPrompt: null, translationDeeplApiKey: 'fake-key' } }),
   { chatId: 'c', provider: 'deepl', targetLanguage: 'ko', connectionId: undefined, systemPrompt: undefined, deeplApiKey: 'fake-key', deeplxUrl: undefined });
-  assert.ok(sourceMatches({ content: 'original', extra: { translationSource: 'long transformed', translationPolisherLongSource: 'original' } }));
+  assert.equal(sourceMatches({ content: 'original', extra: { translationSource: 'long transformed', translationPolisherLongSource: 'original' } }), false);
   assert.equal(sourceMatches({ content: 'swipe2', extra: { translationSource: 'long transformed', translationPolisherLongSource: 'original' } }), false);
 });
 test('split translates sequential chunks with host config, PATCHes only translation fields, reapplies regex', async t => {
@@ -154,7 +154,7 @@ test('automatic continuation defaults off, opts in independently, and never loop
 });
 test('polisher API output/longSource and DOM changes converge, controls remain untouched, cube follows slider', async t => {
   const h = await setup(t, { settings: { autoApply: true }, fixture: { messages: [message({ extra: {
-    translation: '<status>다듬기 결과</status>', translationSource: 'long transformed', translationPolisherLongSource: 'original', translationPolisherOutput: 'stale ignored',
+    translation: '<status>다듬기 결과</status>', translationSource: 'original', translationPolisherLongSource: 'original', translationPolisherOutput: 'stale ignored',
   } })] } });
   assert.equal(h.body.textContent, '다듬기 결과');
   const ui = h.w.document.querySelector('[data-translation-polisher-ui]'), button = ui.lastElementChild;

@@ -3,7 +3,7 @@
 작성일: 2026-10-29
 내부 키: `translation_regex_me`
 
-아래 기존 내용은 0.1 작업 기록입니다. 최신 변경·검증·제한 사항은 마지막 **0.3.1 설정 런처·말랑 리모콘 호환** 절을 기준으로 합니다.
+아래 기존 내용은 0.1 작업 기록입니다. 최신 변경·검증·제한 사항은 마지막 **0.3.2 Marinara Engine 2.5.2 재동기화** 절을 기준으로 합니다.
 
 ## 결과 (0.1 기록)
 
@@ -231,3 +231,36 @@ manifest, Shadow DOM UI, 빌드·정리·ZIP 구성은 지정된 slowplot/anywhe
 실제 Marinara·GitHub 확장 관리·말랑 리모콘 설치와 휴대폰 가상 키보드 환경은 미검증입니다. 알려진 wrapper와 편집기 fallback으로 composer를 감지하므로 다른 호스트 구조에서는 추가 확인이 필요합니다. CSS/jsdom 검증은 실제 기기 검증을 대체하지 않습니다.
 
 외부 요청과 지정된 금지 경로·포트 접근 없이 작업했습니다. 산출물과 QA 로그에 로컬 절대경로를 남기지 않으며 QA 경로는 `<repo>`로 치환합니다. 기존 미커밋 변경을 유지했고 **git commit·push는 수행하지 않았습니다**.
+
+## 0.3.2 Marinara Engine 2.5.2 재동기화
+
+작성일: 2026-11-06. 참조: 읽기 전용 `marinara-engine-ref`, 태그 **v2.5.2**, 커밋 `fc0333c3fe978cda5e0b919bd6faec985901704e`. 확장 package/lock/manifest 버전은 **0.3.2**이며 manifest 스키마는 1입니다. 이 절은 이전 절의 출처 fallback 설명을 대체합니다.
+
+### 변경 파일과 동작
+
+- `scripts/import-reference.py`, `vendor/UPSTREAM.json`, `vendor/upstream/`: 문서의 import → test → package 절차를 따랐습니다. 기존 10개 중 `use-apply-regex.ts`, `chat-macros.ts`, `chat-html.ts`, `regex-safety.ts`, `macro-engine.ts` 5개가 변경되고 나머지 5개는 바이트가 같습니다. 새 매크로 엔진 의존성 `dice-notation.ts`와 그 런타임 의존성 `vendor/features/tactical-combat/rng.ts`를 원본 그대로 추가해 **12개 SHA-256**을 기록했습니다. RNG 위치는 dice 파일의 상대 import를 유지하기 위한 것입니다. 타입 전용 import는 esbuild가 제거합니다.
+- `src/regex.ts`, `src/macros.ts`, `src/html-policy.ts`: 고정 줄 번호로 자르면 새 함수가 잘리는 문제를 해결하기 위해 importer를 이름 기반 경계 추출로 변경했습니다. 경계 검증은 쓰기 전에 수행하고 원본 줄 주석을 재생성합니다. 정규식 컴파일 캐시와 sticky lastIndex 초기화, 새 주사위 표기·안전성 검사가 반영되었습니다. 메시지 allowlist 내용은 동일하며 아티팩트 전용 SVG 허용은 번역 HTML에 추가하지 않았습니다.
+- `src/data.ts`: 호스트 `ChatMessage.tsx:2840-2863`과 같이 채팅 변수(문자열만), 프리셋 변수 우선순위, 비활성 캐릭터 제외 그룹 문맥을 연결했습니다. 변수 쓰기는 resolver 내부 복사본에만 적용하며 서버/채팅 metadata를 변경하지 않습니다.
+- `src/runtime.ts`, `src/translation.ts`: 호스트 `ChatMessage.tsx:2220-2223`의 `!isStreaming && (translationSource === undefined || translationSource === message.content)` 규칙에 맞췄습니다. 정의된 출처는 null/잘못된 타입을 포함해 정확히 일치해야 합니다. 별도 번역 칸에서만 출처 없는 구형 번역을 허용하고, 번역 전용 본문은 `:3509-3510`과 같이 정확한 출처 일치가 필요합니다. `translationPolisherLongSource`는 불일치 우회로 사용하지 않습니다. 자동 이어 번역의 출처 확인도 같은 기준을 사용합니다.
+- 관련 DOM 변경을 감지한 MutationObserver에서 이전 확장 표시를 즉시 제거합니다. 새 스와이프/본문이 바뀌었는데 API 재조회가 지연되는 동안 이전 패널이 남지 않도록 했습니다. 호스트 스토어 생성 이벤트는 동기적으로 제거하며, 공개 스토어가 없으면 기존 same-origin 생성 상태 폴링으로 확인합니다. DOM/스토어 이벤트 없이 API만 바뀌는 경우에는 기존 약 2초 폴링 지연이 남습니다.
+- `ChatMessage.tsx:3513-3517`은 번역 뒤에 인라인 명령 결과를 붙입니다. `RoleplayCommandResults.tsx`와 `ChatMessage.tsx:3314-3357`의 주사위·귓속말·삽화·아티팩트 data 표식을 감지하면 **호스트 본문 전체를 유지**합니다. 비대화형 주사위/SVG 아티팩트도 숨기지 않으며 결과 순서·노드·이벤트를 보존합니다. 이런 본문에는 정규식을 적용하지 않는 보수적 fallback이고, 별도 번역 칸은 계속 적용할 수 있습니다.
+- `tests/resync.test.mjs` 회귀 9개 추가, `tests/package.test.mjs` 해시 경로/버전 갱신, `tests/translation.test.mjs` 출처 기준 갱신. `README.md`, `CHANGELOG.md`, `NOTICE`, package/lock/manifest, 브라우저 QA 버전과 로그를 갱신하고 루트·dist·ZIP을 재생성했습니다.
+
+### 검증
+
+- **`npm test`: 129개 통과, 실패 0, 생략 0.** 기존 120개 + 새 회귀 9개. 기록: `qa/test-results.txt`. 스코프 49조합 및 스코프/대상/프리셋/깊이 720조합의 원본 함수 비교도 기존 테스트에 포함됩니다.
+- 새 회귀: 별도/번역 전용의 출처 누락·일치·불일치·null·잘못된 타입, polisher 우회 차단, 지연 API 동안 새 스와이프의 이전 표시 제거, 스트리밍 중 지연 응답 거부, 완료 후 출처 재확인, 네 명령 결과의 원래 노드·순서·이벤트 보존, 별도 번역 칸과 명령 결과 공존, sticky 캐시 재사용, 중첩 대안 안전성, 주사위 표기·시드, 채팅 변수/그룹 문맥을 검증했습니다.
+- 로컬 의존성이 없어 임시 디렉터리에 복사한 npm 캐시만 사용했습니다. `npm ci --offline`은 기존 lockfile의 선택 의존성 누락으로 실패했고, `npm install --offline --ignore-scripts --no-audit --no-fund`는 성공했습니다. 의존성 버전은 바꾸지 않았습니다. 테스트 API는 메모리 fixture이며 외부 네트워크 요청 없이 실행했습니다.
+- importer 재실행의 **멱등성 통과**. 참조 원본/동봉 파일/기록된 해시 **12개 모두 일치**, 기존 파일 변경 **5개**, 새 의존성 **2개** 확인.
+- **`npm run package` 성공.** ZIP 112,345바이트, SHA-256 `18be478141df7d0ab64256e7c18052714a0f09b25885598eaed9661072d6207c`. ZIP CRC·루트 네 파일·root/dist 바이트 일치·0.3.2 버전·산출물의 로컬 절대경로 부재 확인. 패키지 테스트의 결정성 검사 통과. `node --check` 루트/dist 번들·브라우저 QA 스크립트 및 `git diff --check` 통과. 요약: `qa/final-verification.json`, `qa/package.json`.
+- **`npm run qa:browser`: 차단, 완료 검사 0개.** Chromium이 페이지 생성 전에 crashpad `setsockopt: Operation not permitted` / SIGTRAP으로 종료했습니다. `qa/browser-results.json`, `qa/browser-log.txt`에 기록했습니다. 실제 브라우저 레이아웃 통과를 주장하지 않습니다.
+
+### 찹쌀의 QA 확인 항목
+
+1. QA 인스턴스 2.5.2에서 0.3.2 ZIP을 가져오고 별도 번역 칸/번역 전용 모드 각각 수동 큐브와 자동 적용을 확인합니다. DEM/Sola 등의 실제 규칙이 현재 번역에 적용되는지 확인합니다.
+2. 번역된 메시지에서 새 스와이프 생성·기존 스와이프 이동·원문 편집을 수행합니다. 생성 중 또는 출처 불일치 상태에 이전 번역 패널이 남거나 지연 응답으로 다시 나타나지 않아야 합니다. 완료 후 현재 원문으로 새 번역하면 다시 적용되어야 합니다.
+3. 번역 전용 본문에 주사위·귓속말·삽화·아티팩트를 각각 포함합니다. 호스트 번역 뒤 결과 순서가 유지되고 누락/중복 없이 표시되며 귓속말/이미지 컨트롤이 동작해야 합니다. 이 경우 확장은 본문 정규식을 건너뛰는 것이 의도된 동작입니다.
+4. 다듬기 결과의 `translationSource`가 현재 원문과 같은 경우 적용하고, `translationPolisherLongSource`만 같은 경우 이전 번역을 강제로 표시하지 않는지 확인합니다. 대화 모드의 기존 중복 적용 방지와 이어서/나눠 번역 저장도 확인합니다.
+5. 실제 휴대폰/360px에서 큐브·런처·설정 모달·가상 키보드 및 말랑 리모콘 숨김 상태 클릭을 확인합니다. 실제 React 갱신·공급자 연동·모바일 배치는 여기서 실행하지 않았습니다.
+
+QA 인스턴스는 접근/수정하지 않았습니다. 변경은 이 저장소와 임시 디렉터리에만 했고 참조 소스는 읽기 전용으로 사용했습니다. 금지 경로·context 텍스트·포트·호스트에 접근하지 않았으며 **commit/push는 수행하지 않았습니다**.

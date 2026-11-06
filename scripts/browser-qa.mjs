@@ -6,7 +6,7 @@ const safeError = error => String(error).replaceAll(process.cwd(), '<repo>').rep
 let browser;
 try { browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--disable-gpu'] }); }
 catch (error) {
-  writeFileSync('qa/browser-results.json', JSON.stringify({ version: '0.3.1', status: 'blocked', viewport: '360x780', checksCompleted: 0, reason: safeError(error) }, null, 2) + '\n');
+  writeFileSync('qa/browser-results.json', JSON.stringify({ version: '0.3.2', status: 'blocked', viewport: '360x780', checksCompleted: 0, reason: safeError(error) }, null, 2) + '\n');
   console.error(safeError(error)); process.exit(1);
 }
 const checks = [], blocked = [], errors = [];
@@ -122,6 +122,6 @@ main{max-width:100%;display:flex;flex-direction:column;gap:8px}.host-control{col
   checks.push(['no external/resource requests', blocked.length === 0]);
   checks.push(['no browser errors', errors.length === 0]);
   for (const [name, ok] of checks) assert.equal(ok, true, name);
-  writeFileSync('qa/browser-results.json', JSON.stringify({ version: '0.3.1', status: 'passed', viewport: '360x780', checks, blocked, errors }, null, 2) + '\n');
+  writeFileSync('qa/browser-results.json', JSON.stringify({ version: '0.3.2', status: 'passed', viewport: '360x780', checks, blocked, errors }, null, 2) + '\n');
   console.log(`${checks.length} browser checks passed`);
 } finally { await browser.close(); }

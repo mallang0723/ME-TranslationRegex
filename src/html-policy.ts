@@ -1,4 +1,4 @@
-// packages/client/src/lib/chat-html.ts:31-116, exact host allowlists.
+// packages/client/src/lib/chat-html.ts:33-118, exact host message allowlists.
 export const CHAT_HTML_ALLOWED_TAGS = [
   "a",
   "abbr",

@@ -1,12 +1,14 @@
 {
-  "client/src/hooks/use-apply-regex.ts": "c607efc21b45f6523112f22ef204371d05abb67b8454707d129a7c3b83fd9b58",
-  "client/src/lib/chat-macros.ts": "6b931182f8536ed40671adf0e28aff91728d415d3f928ab8635bf61f22259ff9",
-  "client/src/lib/chat-html.ts": "6650edf7a43dc26aec7b8abf35a5e9f13365c0a302ca8bd91848fa53d3a298c5",
+  "client/src/hooks/use-apply-regex.ts": "8b3164914f2095641d90990096f1a246448896a92cb3f3b9a206a53421362aa5",
+  "client/src/lib/chat-macros.ts": "2e05079156da1460317e51560bbd056ebf01eb157824b9bb76b62018f874a718",
+  "client/src/lib/chat-html.ts": "9b6f4e760b9bb95163547579228ff69d8c53f4f492fce21bdb24018bdcc21e6a",
   "client/src/lib/chat-message-css.ts": "3301eaa702126b14561502bc83be6942379d075da23a3526319eef6030bc3902",
   "shared/src/utils/regex-scoping.ts": "9a8f7311ed3cf1c2a9c747518d8ac56c6c1d2a606eac646e3a1bb93eff9f85eb",
   "shared/src/utils/regex-replacement.ts": "367dca99dac666aa6868d8268b355cbd7cf00e780db5804c1a11ac1b76da30ec",
-  "shared/src/utils/regex-safety.ts": "99eb9ece232df05ab6765468f4965fd6b1054924c5a36894978e3b76e1d56db1",
-  "shared/src/utils/macro-engine.ts": "4c6269334bf760d2a9ab9da245d1f53b3b780942691dc716d047309aa469753f",
+  "shared/src/utils/regex-safety.ts": "7f84ec40fc2bfb459fd9daf202140cf2b6bc2e9858256517d3cfe9caf28079bc",
+  "shared/src/utils/macro-engine.ts": "6338408b605676fc8330d502c9eea9b2e3f45c2559a773eb1c1a5b20544692d7",
   "shared/src/utils/preset-choices.ts": "f56acdf0993e44b7ec9ec9ffb6a80f63dc253c6816e188fc8b4b631c2a2d61d8",
-  "shared/src/utils/quote-format.ts": "27593f59389bcadc2af8832c11c5bfdb1163b4f96b45dfcea5ee892602bc685b"
+  "shared/src/utils/quote-format.ts": "27593f59389bcadc2af8832c11c5bfdb1163b4f96b45dfcea5ee892602bc685b",
+  "shared/src/utils/dice-notation.ts": "44df0adb1ff2f975c32ec1bb1a64b535826fa7fc21260500c02d2e55d169a37f",
+  "shared/src/features/tactical-combat/rng.ts": "4cc96606133864b368dd925cbf4d598e0af9b312a698bc24616f0ec5eb5f09ab"
 }

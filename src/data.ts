@@ -87,7 +87,13 @@ export function createData(api: any, window: any) {
         multiSelect: block.multiSelect, randomPick: block.randomPick, separator: block.separator,
         random: () => seededUnitRandom(`${seed}:${block.variableName}`) })]));
     // No server prompt context, lorebook expansion, persisted variable writes, or extra macro passes.
-    const context = { variables, userName: persona?.name ?? (chat.mode === 'conversation' ? 'User' : 'You'), persona,
+    // 2.5.2 display context: string chat variables, preset precedence and active group roster.
+    const metadata = record(chat.metadata), storedVariables = metadata.macroVariables;
+    const chatVariables = storedVariables && typeof storedVariables === 'object' && !Array.isArray(storedVariables)
+      ? Object.fromEntries(Object.entries(storedVariables).filter(([, value]) => typeof value === 'string')) : {};
+    const context = { variables, chatVariables,
+      inactiveCharacterIds: chat.mode === 'roleplay' ? metadata.inactiveCharacterIds : undefined,
+      userName: persona?.name ?? (chat.mode === 'conversation' ? 'User' : 'You'), persona,
       primaryCharacter, characters: characters.length ? characters : [primaryCharacter] };
     // ConversationMessage.tsx:396-399 constructs a resolver per call; RP shares one per display computation.
     return chat.mode === 'conversation'

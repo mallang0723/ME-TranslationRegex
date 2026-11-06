@@ -87,9 +87,8 @@ export function continuationOffset(source: string, translation: string): number 
   return null;
 }
 export function sourceMatches(message: any, extra = record(message.extra)) {
-  return extra.translationSource === message.content ||
-    (typeof extra.translationPolisherLongSource === 'string' && extra.translationPolisherLongSource.length > 0 &&
-      extra.translationPolisherLongSource === message.content);
+  // Host 2.5.2 uses translationSource itself; polisher metadata cannot override it.
+  return extra.translationSource === message.content;
 }
 export function translationConfig(chat: any) {
   // shared/src/utils/translator-defaults.ts:64-99 (including legacy and explicit prompt reset).

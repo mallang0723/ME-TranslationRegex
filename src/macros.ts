@@ -1,5 +1,5 @@
-import { resolveMacros } from '../vendor/upstream/macro-engine';
-// packages/client/src/lib/chat-macros.ts:13-91,161-252, copied without network/input helpers.
+import { resolveMacros, type MacroContext } from '../vendor/upstream/macro-engine';
+// packages/client/src/lib/chat-macros.ts:13-91,161-265, copied without network/input helpers.
 export interface MacroCharacterData {
   id?: string;
   name: string;
@@ -83,24 +83,37 @@ export function buildMessageMacroContext({
   persona,
   primaryCharacter,
   characters = [],
+  inactiveCharacterIds,
   userName,
   variables = {},
+  chatVariables,
   lastInput,
 }: {
   persona?: MacroPersonaData | null;
   primaryCharacter?: MacroCharacterData | null;
   characters?: MacroCharacterData[];
+  inactiveCharacterIds?: unknown;
   userName?: string;
   variables?: Record<string, string>;
+  /** The chat's own variables (`metadata.macroVariables`). Preset `variables` win over them, as in the prompt. */
+  chatVariables?: Record<string, string>;
   lastInput?: string;
 }): MacroContext {
   const fallbackCharacter = primaryCharacter ?? characters[0] ?? null;
+  const inactiveIds = new Set(Array.isArray(inactiveCharacterIds) ? inactiveCharacterIds : []);
 
   return {
     user: userName ?? persona?.name ?? "User",
     char: fallbackCharacter?.name ?? "Character",
     characters: characters.map((character) => character.name).filter((name) => name.trim().length > 0),
+    groupCharacters: characters
+      .filter((character) => !character.id || !inactiveIds.has(character.id))
+      .map((character) => character.name)
+      .filter((name) => name.trim().length > 0),
     variables,
+    // A copy per context: {{setvar}} writes into localVariables, and showing a
+    // message must never change the chat's variables or leak into another message.
+    ...(chatVariables ? { localVariables: { ...chatVariables } } : {}),
     lastInput,
     characterFields: fallbackCharacter
       ? {

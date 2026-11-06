@@ -1,4 +1,4 @@
-// Mechanical port of use-apply-regex.ts:21-160. Server order is preserved (176-179).
+// Mechanical port of use-apply-regex.ts:21-186. Server order is preserved.
 import { applyRegexReplacement, resolveRegexPatternLiteralMacros } from '../vendor/upstream/regex-replacement';
 import { isPatternSafe } from '../vendor/upstream/regex-safety';
 export { resolveScopedRegexMode } from '../vendor/upstream/regex-scoping';
@@ -74,6 +74,35 @@ export function parseScript(row: RegexScriptRow) {
   };
 }
 
+// Each script's pattern is checked and compiled once, not once per message it touches. Patterns with
+// macros resolve to a different source per speaker, so the key is the resolved source and its flags.
+const COMPILED_PATTERN_LIMIT = 500;
+const compiledPatterns = new Map<string, RegExp | null>();
+
+export function compileRegexScriptPattern(source: string, flags: string): RegExp | null {
+  const key = `${flags}\u0000${source}`;
+  // packages/client/src/hooks/use-apply-regex.ts:88
+  if (compiledPatterns.has(key)) return compiledPatterns.get(key)!;
+  let compiled: RegExp | null = null;
+  // packages/client/src/hooks/use-apply-regex.ts:90
+  if (isPatternSafe(source)) {
+    try {
+      compiled = new RegExp(source, flags);
+    // packages/client/src/hooks/use-apply-regex.ts:93
+    } catch {
+      compiled = null;
+    }
+  }
+  // packages/client/src/hooks/use-apply-regex.ts:97
+  if (compiledPatterns.size >= COMPILED_PATTERN_LIMIT) {
+    const oldest = compiledPatterns.keys().next().value;
+    // packages/client/src/hooks/use-apply-regex.ts:99
+    if (oldest !== undefined) compiledPatterns.delete(oldest);
+  }
+  compiledPatterns.set(key, compiled);
+  return compiled;
+}
+
 /**
  * Applies all enabled regex scripts for a given placement to the input text.
  * @param depth — message depth (0 = latest message, 1 = one before, etc.). When
@@ -95,86 +124,88 @@ export function applyScripts(
   },
 ): string {
   let result = text;
-  // packages/client/src/hooks/use-apply-regex.ts:102
+  // packages/client/src/hooks/use-apply-regex.ts:126
   for (const script of scripts) {
-    // packages/client/src/hooks/use-apply-regex.ts:103
+    // packages/client/src/hooks/use-apply-regex.ts:127
     if (!script.enabledBool) continue;
-    // packages/client/src/hooks/use-apply-regex.ts:104
+    // packages/client/src/hooks/use-apply-regex.ts:128
     if (!script.placements.includes(placement)) continue;
     // Prompt context is opt-in. Display context runs visual scripts only.
-    // packages/client/src/hooks/use-apply-regex.ts:106
+    // packages/client/src/hooks/use-apply-regex.ts:130
     if (options?.promptOnly) {
-      // packages/client/src/hooks/use-apply-regex.ts:107
+      // packages/client/src/hooks/use-apply-regex.ts:131
       if (script.applyMode !== "prompt" && script.applyMode !== "both") continue;
-    // packages/client/src/hooks/use-apply-regex.ts:108
+    // packages/client/src/hooks/use-apply-regex.ts:132
     } else if (script.applyMode !== "display" && script.applyMode !== "both") {
       continue;
     }
 
-    // packages/client/src/hooks/use-apply-regex.ts:112
+    // packages/client/src/hooks/use-apply-regex.ts:136
     if (options?.targetedOnly && script.targetCharacterIds.length === 0) continue;
-    // packages/client/src/hooks/use-apply-regex.ts:113
+    // packages/client/src/hooks/use-apply-regex.ts:137
     if (script.targetCharacterIds.length > 0) {
-      // packages/client/src/hooks/use-apply-regex.ts:114
+      // packages/client/src/hooks/use-apply-regex.ts:138
       if (options?.promptOnly) {
         // Prompt context: match the character whose prompt is being assembled.
-        // packages/client/src/hooks/use-apply-regex.ts:116
+        // packages/client/src/hooks/use-apply-regex.ts:140
         if (!options.targetCharacterId || !script.targetCharacterIds.includes(options.targetCharacterId)) continue;
       } else {
         // Display context: gate the scoped script by the chat's tri-state mode —
         // disabled → off; exclusive → only on a target character's own messages;
         // chat → on every message.
         const rawMode = options?.scopedMode;
-        // packages/client/src/hooks/use-apply-regex.ts:122
+        // packages/client/src/hooks/use-apply-regex.ts:146
         const mode: ScopedRegexMode = rawMode === "exclusive" || rawMode === "chat" ? rawMode : "disabled";
-        // packages/client/src/hooks/use-apply-regex.ts:123
+        // packages/client/src/hooks/use-apply-regex.ts:147
         if (mode === "disabled") continue;
-        // packages/client/src/hooks/use-apply-regex.ts:124
+        // packages/client/src/hooks/use-apply-regex.ts:148
         if (mode === "exclusive") {
           const charId = options?.characterId;
-          // packages/client/src/hooks/use-apply-regex.ts:126
+          // packages/client/src/hooks/use-apply-regex.ts:150
           if (!charId || !script.targetCharacterIds.includes(charId)) continue;
         }
       }
     }
-    // packages/client/src/hooks/use-apply-regex.ts:130
+    // packages/client/src/hooks/use-apply-regex.ts:154
     if (script.targetPromptPresetIds.length > 0) {
-      // packages/client/src/hooks/use-apply-regex.ts:131
+      // packages/client/src/hooks/use-apply-regex.ts:155
       if (!options?.promptPresetId || !script.targetPromptPresetIds.includes(options.promptPresetId)) continue;
     }
 
     // Depth range filtering
-    // packages/client/src/hooks/use-apply-regex.ts:135
+    // packages/client/src/hooks/use-apply-regex.ts:159
     if (options?.depth != null) {
-      // packages/client/src/hooks/use-apply-regex.ts:136
+      // packages/client/src/hooks/use-apply-regex.ts:160
       if (script.minDepth != null && options.depth < script.minDepth) continue;
-      // packages/client/src/hooks/use-apply-regex.ts:137
+      // packages/client/src/hooks/use-apply-regex.ts:161
       if (script.maxDepth != null && options.depth > script.maxDepth) continue;
     }
 
     try {
       const findRegex = options?.resolveMacros
-        // packages/client/src/hooks/use-apply-regex.ts:142
+        // packages/client/src/hooks/use-apply-regex.ts:166
         ? resolveRegexPatternLiteralMacros(script.findRegex, options.resolveMacros)
         : script.findRegex;
-      // packages/client/src/hooks/use-apply-regex.ts:144
+      // packages/client/src/hooks/use-apply-regex.ts:168
       if (!findRegex) continue;
-      // packages/client/src/hooks/use-apply-regex.ts:145
-      if (!isPatternSafe(findRegex)) continue;
-      const re = new RegExp(findRegex, script.flags);
+      const re = compileRegexScriptPattern(findRegex, script.flags);
+      // packages/client/src/hooks/use-apply-regex.ts:170
+      if (!re) continue;
+      // A shared sticky pattern resumes from its last match, so every use starts at the beginning.
+      re.lastIndex = 0;
       result = applyRegexReplacement(result, re, script.replaceString, (value) =>
-        // packages/client/src/hooks/use-apply-regex.ts:148
+        // packages/client/src/hooks/use-apply-regex.ts:174
         options?.resolveMacros ? options.resolveMacros(value) : value,
       );
       // Apply trim strings
-      // packages/client/src/hooks/use-apply-regex.ts:151
+      // packages/client/src/hooks/use-apply-regex.ts:177
       for (const trim of script.trimStrings) {
-        // packages/client/src/hooks/use-apply-regex.ts:152
+        // packages/client/src/hooks/use-apply-regex.ts:178
         const resolvedTrim = options?.resolveMacros ? options.resolveMacros(trim) : trim;
-        // packages/client/src/hooks/use-apply-regex.ts:153
+        // packages/client/src/hooks/use-apply-regex.ts:179
         if (resolvedTrim) result = result.split(resolvedTrim).join("");
       }
-    // packages/client/src/hooks/use-apply-regex.ts:155
+    // packages/client/src/hooks/use-apply-regex.ts:181
     } catch {
       // Invalid regex — skip silently
     }

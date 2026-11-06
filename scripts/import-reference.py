@@ -1,32 +1,60 @@
 # Explicit read-only import of the authorized reference; never scans other workspaces.
 from pathlib import Path
-import hashlib,json
+import hashlib
+import json
 import os
-root=Path(os.environ.get('MARINARA_REF', '../marinara-engine-ref'))/'packages'
-out=Path('vendor/upstream'); out.mkdir(parents=True,exist_ok=True)
-files=['client/src/hooks/use-apply-regex.ts','client/src/lib/chat-macros.ts','client/src/lib/chat-html.ts','client/src/lib/chat-message-css.ts']
-files += ['shared/src/utils/'+n+'.ts' for n in ['regex-scoping','regex-replacement','regex-safety','macro-engine','preset-choices','quote-format']]
-manifest={}
-for p in files:
-    data=(root/p).read_bytes(); (out/Path(p).name).write_bytes(data)
-    manifest[p]=hashlib.sha256(data).hexdigest()
-Path('vendor/UPSTREAM.json').write_text(json.dumps(manifest,indent=2)+'\n')
-Path('vendor/upstream/LICENSE').write_bytes((root.parent/'LICENSE').read_bytes())
-# Remove only React plumbing/types through esbuild later. Every branch retains a source-line reference.
-s=(out/'use-apply-regex.ts').read_text().splitlines()
-lines=[]
-for n,line in enumerate(s[20:160],21):
-    if any(x in line for x in ['if (','catch','for (','? ',': row.']):
-        lines.append(' '* (len(line)-len(line.lstrip()))+f'// packages/client/src/hooks/use-apply-regex.ts:{n}')
-    lines.append(line.replace('function parseScript(', 'export function parseScript(').replace('function applyScripts(', 'export function applyScripts('))
-Path('src/regex.ts').write_text('''// Mechanical port of use-apply-regex.ts:21-160. Server order is preserved (176-179).
-import { applyRegexReplacement, resolveRegexPatternLiteralMacros } from '../vendor/upstream/regex-replacement';
+
+root = Path(os.environ.get('MARINARA_REF', '../marinara-engine-ref')) / 'packages'
+out = Path('vendor/upstream')
+out.mkdir(parents=True, exist_ok=True)
+files = ['client/src/hooks/use-apply-regex.ts', 'client/src/lib/chat-macros.ts',
+         'client/src/lib/chat-html.ts', 'client/src/lib/chat-message-css.ts']
+files += ['shared/src/utils/' + n + '.ts' for n in
+          ['regex-scoping', 'regex-replacement', 'regex-safety', 'macro-engine',
+           'preset-choices', 'quote-format', 'dice-notation']]
+targets = {p: out / Path(p).name for p in files}
+# Keep dice-notation's relative runtime import intact, without editing vendor bytes.
+targets['shared/src/features/tactical-combat/rng.ts'] = Path('vendor/features/tactical-combat/rng.ts')
+
+# Validate extraction boundaries before writing anything. Named boundaries survive
+# inserted functions/imports; missing or ambiguous markers fail instead of truncating.
+sources = {p: (root / p).read_bytes() for p in targets}
+
+def section(name, start, end):
+    source = sources[name].decode()
+    if source.count(start) != 1 or source.count(end) != 1:
+        raise ValueError(f'Ambiguous extraction boundaries: {name}')
+    first, last = source.index(start), source.index(end)
+    if last <= first:
+        raise ValueError(f'Reversed extraction boundaries: {name}')
+    line = source.count('\n', 0, first) + 1
+    return source[first:last].rstrip(), line
+
+regex, line = section('client/src/hooks/use-apply-regex.ts', 'type RegexApplyMode', '/**\n * Hook that provides')
+lines = []
+for n, value in enumerate(regex.splitlines(), line):
+    if any(x in value for x in ['if (', 'catch', 'for (', '? ', ': row.']):
+        lines.append(' ' * (len(value) - len(value.lstrip())) + f'// packages/client/src/hooks/use-apply-regex.ts:{n}')
+    lines.append(value.replace('function parseScript(', 'export function parseScript(')
+                 .replace('function applyScripts(', 'export function applyScripts('))
+regex_port = f'// Mechanical port of use-apply-regex.ts:{line}-{line + len(regex.splitlines()) - 1}. Server order is preserved.\n' + '''import { applyRegexReplacement, resolveRegexPatternLiteralMacros } from '../vendor/upstream/regex-replacement';
 import { isPatternSafe } from '../vendor/upstream/regex-safety';
 export { resolveScopedRegexMode } from '../vendor/upstream/regex-scoping';
-'''+ '\n'.join(lines)+'\n')
-s=(out/'chat-macros.ts').read_text().splitlines()
-Path('src/macros.ts').write_text("import { resolveMacros } from '../vendor/upstream/macro-engine';\n// packages/client/src/lib/chat-macros.ts:13-91,161-252, copied without network/input helpers.\n"+'\n'.join(s[12:91])+ '\n'+'\n'.join(s[160:252])+'\n')
-s=(out/'chat-html.ts').read_text().splitlines()
-Path('src/html-policy.ts').write_text('// packages/client/src/lib/chat-html.ts:31-116, exact host allowlists.\n'+'\n'.join(s[30:116]).replace('const CHAT_', 'export const CHAT_')+'\n')
-s=(out/'chat-message-css.ts').read_text().replace('from "./remote-images"','from "./remote-images"')
-Path('src/host-css.ts').write_text('// Adapted import only; packages/client/src/lib/chat-message-css.ts:1-561.\n'+s)
+''' + '\n'.join(lines) + '\n'
+macro_data, data_line = section('client/src/lib/chat-macros.ts', 'export interface MacroCharacterData', 'function toMacroPersonaData(')
+macro_resolver, resolver_line = section('client/src/lib/chat-macros.ts', 'export function buildMessageMacroContext(', 'export function isPromptPreviewMacro(')
+macro_port = "import { resolveMacros, type MacroContext } from '../vendor/upstream/macro-engine';\n" + \
+    f'// packages/client/src/lib/chat-macros.ts:{data_line}-{data_line + len(macro_data.splitlines()) - 1},{resolver_line}-{resolver_line + len(macro_resolver.splitlines()) - 1}, copied without network/input helpers.\n' + \
+    macro_data + '\n' + macro_resolver + '\n'
+policy, policy_line = section('client/src/lib/chat-html.ts', 'const CHAT_HTML_ALLOWED_TAGS', 'export type SanitizeChatHtmlOptions')
+policy_port = f'// packages/client/src/lib/chat-html.ts:{policy_line}-{policy_line + len(policy.splitlines()) - 1}, exact host message allowlists.\n' + policy.replace('const CHAT_', 'export const CHAT_') + '\n'
+
+for p, target in targets.items():
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(sources[p])
+Path('vendor/UPSTREAM.json').write_text(json.dumps({p: hashlib.sha256(data).hexdigest() for p, data in sources.items()}, indent=2) + '\n')
+(out / 'LICENSE').write_bytes((root.parent / 'LICENSE').read_bytes())
+Path('src/regex.ts').write_text(regex_port)
+Path('src/macros.ts').write_text(macro_port)
+Path('src/html-policy.ts').write_text(policy_port)
+Path('src/host-css.ts').write_text('// Adapted import only; packages/client/src/lib/chat-message-css.ts:1-561.\n' + sources['client/src/lib/chat-message-css.ts'].decode())

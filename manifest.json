@@ -3,7 +3,7 @@
   "version": 1,
   "config": {
     "name": "번역문 표시 정규식 · 개인용",
-    "version": "0.3.1",
+    "version": "0.3.2",
     "description": "번역문 표시 정규식과 끊긴 번역 이어서·나눠 번역을 제공합니다. 내부 키: translation_regex_me. 비공개 개인용.",
     "runtime": "client",
     "enabled": false,

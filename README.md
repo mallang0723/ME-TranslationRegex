@@ -1,4 +1,4 @@
-# 번역문 표시 정규식 · 개인용 0.3.1
+# 번역문 표시 정규식 · 개인용 0.3.2
 
 `translation_regex_me`는 마리나라 번역문에 기존 표시 정규식을 적용하는 개인 확장입니다. 정규식 표시 기능에 더해 끊긴 번역 이어서 처리와 긴 원문 분할 번역을 제공합니다. 번역 작업은 저장된 번역 필드를 갱신하며 메시지 원문과 정규식은 변경하지 않습니다.
 
@@ -12,11 +12,11 @@
 
 수동 선택은 현재 채팅·메시지·스와이프별로 기억합니다. 다른 스와이프는 기본 설정을 따르고, 이전 스와이프로 돌아오면 그 선택을 복원합니다. 설정 변경·채팅 이동·확장 재시작 시 선택은 초기화됩니다. 캐릭터 전용 규칙은 채팅/프리셋의 정규식 스코프 설정도 따라갑니다.
 
-대화 모드는 기본 꺼짐입니다. 켜더라도 `translationSource` 또는 다듬기 확장의 `translationPolisherLongSource`가 메시지 원문과 정확히 같은 번역만 적용합니다. 마리나라는 보통 정규식으로 가공한 HTML을 번역하므로 출처가 다르거나 불명확한 번역에는 중복 적용하지 않습니다.
+대화 모드는 기본 꺼짐입니다. 켜더라도 `translationSource`가 메시지 원문과 정확히 같은 번역만 적용합니다. 마리나라는 보통 정규식으로 가공한 HTML을 번역하므로 출처가 다르거나 불명확한 번역에는 중복 적용하지 않습니다.
 
 ## 동작
 
-- API의 현재 스와이프 `extra.translation`을 사용합니다. DOM에서 지워진 `<status>` 같은 태그를 복구해서 변환합니다.
+- API의 현재 스와이프 `extra.translation`을 사용합니다. DOM에서 지워진 `<status>` 같은 태그를 복구해서 변환합니다. Marinara Engine 2.5.2에 맞춰 생성 중에는 확장 표시를 제거하고, 출처가 현재 원문과 다른 번역은 표시하지 않습니다. 별도 번역 칸은 `translationSource`가 없는 구형 번역도 허용하지만, 번역 전용 본문은 정확한 출처 일치가 필요합니다. 스와이프로 DOM이 바뀌면 API 재조회가 끝나기 전에 이전 확장 표시를 제거합니다.
 - 서버 정렬 순서, 활성화, ai_output 배치, display/both, 캐릭터 disabled/exclusive/chat, 채팅 우선 프리셋 기본값, 대상 프리셋, 깊이, 안전성 검사, trimStrings와 원본 매크로 엔진을 따릅니다.
 - 별도 번역 칸과 본문을 교체하는 번역 전용 표시를 지원합니다. API의 표시 모드·현재 원문·번역 출처를 확인한 뒤 원래 노드를 숨기고 형제 Shadow DOM에 결과를 표시합니다. 원래 자식은 보존하고 실패·토글 해제·제거 시 복원합니다.
 - 스타일은 메시지 내부에만 스코프를 붙이고 Shadow DOM에 격리합니다. HTML 허용 목록은 호스트와 동일하며, script/on* 등의 실행 코드는 제거합니다.
@@ -40,16 +40,26 @@
 
 ## 번역 다듬기와 함께 사용
 
-API의 `extra.translation`이 기준이며 `translationPolisherOutput` 같은 보조 결과를 대신 읽지 않습니다. `translationPolisherLongSource`가 현재 원문과 같으면 긴 번역의 출처도 허용합니다. 다듬기 확장의 DOM 변경은 fingerprint로 비교해 다시 적용하며 동일한 변경에는 재렌더하지 않습니다. `[data-translation-polisher-ui]` 컨트롤은 변경하지 않고 번역 영역 안에 대화형 다듬기 UI가 있으면 그 영역을 숨기지 않습니다. 다듬기 필드는 저장 시 보존합니다. 두 확장의 번역 작업을 동시에 실행하는 것보다 한 작업을 끝낸 뒤 다음 작업을 실행하는 편이 적절합니다.
+API의 `extra.translation`이 기준이며 `translationPolisherOutput` 같은 보조 결과를 대신 읽지 않습니다. 2.5.2 호스트와 같이 `translationSource` 자체로 출처를 확인합니다. `translationPolisherLongSource`가 일치해도 다른 `translationSource`를 허용하지 않습니다. 다듬기 확장의 DOM 변경은 fingerprint로 비교해 다시 적용하며 동일한 변경에는 재렌더하지 않습니다. `[data-translation-polisher-ui]` 컨트롤은 변경하지 않고 번역 영역 안에 대화형 다듬기 UI가 있으면 그 영역을 숨기지 않습니다. 다듬기 필드는 저장 시 보존합니다. 두 확장의 번역 작업을 동시에 실행하는 것보다 한 작업을 끝낸 뒤 다음 작업을 실행하는 편이 적절합니다.
 
 ## 개발
 
-Node.js 26에서 검증했습니다. `npm ci`, `npm test`, `npm run package` 순서로 빌드·검증·패키징할 수 있습니다. 설치에는 일반적으로 패키지 레지스트리가 필요하지만 이번 작업에서는 로컬 캐시만 사용했습니다. 실행 ZIP은 네트워크로 의존성을 다운로드하지 않습니다.
+Node.js 26에서 검증했습니다. `npm ci`, `npm test`, `npm run package` 순서로 빌드·검증·패키징할 수 있습니다. 설치에는 일반적으로 패키지 레지스트리가 필요하지만 이번 작업에서는 로컬 캐시만 사용했습니다. 현재 환경의 `npm ci --offline`은 기존 lockfile의 선택 의존성 누락을 보고해 실패했으며, `npm install --offline --ignore-scripts --no-audit --no-fund`로 고정 버전 의존성을 설치했습니다. 실행 ZIP은 네트워크로 의존성을 다운로드하지 않습니다.
 
-`src/regex.ts`는 원본 분기별 파일/줄 주석을 포함합니다. `vendor/UPSTREAM.json`은 읽기 전용 참조 원본의 SHA-256입니다. `scripts/import-reference.py`는 명시된 마리나라 참조 경로에서만 복사합니다. 참조 경로 없이도 동봉 소스만으로 빌드할 수 있습니다.
+현재 참조는 Marinara Engine **v2.5.2** (`fc0333c3fe978cda5e0b919bd6faec985901704e`)입니다. 재동기화는 저장소 루트에서 다음 순서로 합니다.
+
+```sh
+MARINARA_REF=/path/to/read-only/marinara-engine-ref python3 scripts/import-reference.py
+npm test
+npm run package
+```
+
+`vendor/UPSTREAM.json`에는 원본 10개와 매크로 엔진의 새 런타임 의존성 `dice-notation.ts`, `features/tactical-combat/rng.ts`의 SHA-256 총 12개를 기록합니다. 파일은 수정 없이 복사하며, RNG는 dice helper의 상대 import를 그대로 유지하도록 `vendor/features/tactical-combat/rng.ts`에 둡니다. 타입 전용 import는 기존 esbuild 과정에서 제거됩니다. React/입력/네트워크 헬퍼를 제외한 `src/regex.ts`, `src/macros.ts`, `src/html-policy.ts`는 이름 기반 경계로 추출합니다. 경계가 없거나 중복되면 쓰기 전에 실패하며 정규식 분기별 원본 줄 주석을 유지합니다. 메시지 HTML 허용 목록은 유지되며 아티팩트 전용 SVG 허용은 번역 HTML에 적용하지 않습니다. 참조 경로 없이도 동봉 소스만으로 빌드할 수 있습니다.
+
+릴리스 시 package/lock/manifest 버전과 `CHANGELOG.md`를 갱신합니다. `npm run package`는 루트·`dist/` 설치 파일 및 개인 확장 ZIP, `qa/package.json`을 재생성합니다.
 
 ## 적용 범위와 확인 상태
 
-`data-message-id` 안의 `.translation-text`, 또는 `translationDisplayOnly`와 번역 출처가 확인된 단일 `.mari-message-content`를 처리합니다. 메시지 식별이 불가능하거나 본문이 여러 조각인 화면, 편집 중인 화면, 본문에 대화형 명령 결과가 들어 있는 화면은 원래 표시를 유지합니다. `.mari-message-actions`가 있는 AI 메시지에 실행 버튼을 붙이며, 액션 줄이 없는 화면은 수동 버튼을 추가하지 않습니다. HTML 패널 및 주변 텍스트를 표시하며, 변환 결과에 대한 마리나라 고유 Markdown·화자 색상·카드 이미지 해석 파이프라인 전체를 재현하지는 않습니다.
+`data-message-id` 안의 `.translation-text`, 또는 `translationDisplayOnly`와 번역 출처가 확인된 단일 `.mari-message-content`를 처리합니다. 메시지 식별이 불가능하거나 본문이 여러 조각인 화면, 편집 중인 화면, 본문에 인라인 주사위·귓속말·삽화·아티팩트 결과 또는 대화형 컨트롤이 들어 있는 화면은 원래 표시를 유지합니다. 2.5.2의 번역 뒤 명령 결과 순서와 원래 노드·이벤트를 보존하기 위해 이런 본문 전체에는 정규식을 적용하지 않습니다. 별도 번역 칸의 정규식은 계속 지원합니다. `.mari-message-actions`가 있는 AI 메시지에 실행 버튼을 붙이며, 액션 줄이 없는 화면은 수동 버튼을 추가하지 않습니다. HTML 패널 및 주변 텍스트를 표시하며, 변환 결과에 대한 마리나라 고유 Markdown·화자 색상·카드 이미지 해석 파이프라인 전체를 재현하지는 않습니다.
 
 `npm run qa:browser`는 외부 요청을 차단한 가짜 호스트에서 360px 레이아웃을 확인하는 스크립트입니다. 런처의 44px 영역·드래그·입력창 비겹침·숨김 상태 클릭, 메시지 큐브의 짧은 탭·길게 누르기·우클릭, 모달 닫기, 모달의 뷰포트 내 중앙 배치와 입력창 분리, 닫기의 44px 영역, 큐브의 마지막 자식 배치·호스트와 같은 크기 및 기존 액션 간 겹침·줄바꿈을 검사하도록 구성했습니다. 이번 환경에서는 Chromium 실행이 샌드박스 소켓 제한으로 막혀 실제 레이아웃 검증을 완료하지 못했습니다. 자동 테스트와 미확인 항목의 자세한 구분은 저장소의 `REPORT.md`를 참고하세요. 개인 설치용이며 공개 배포용 패키지는 아닙니다.
