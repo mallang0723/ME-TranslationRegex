@@ -9068,6 +9068,24 @@
     return input.options[0]?.value ?? "";
   }
 
+  // src/message-window.ts
+  var messageKey = (id) => ["chats", "messages", id];
+  var recentPath = (id) => `/api/chats/${encodeURIComponent(id)}/messages?limit=3`;
+  function hostMessages(window2, id) {
+    const value = window2.__MARINARA_HOST__?.queryClient?.getQueryData?.(messageKey(id));
+    const rows = Array.isArray(value) ? value : value?.pages?.flat();
+    return Array.isArray(rows) ? rows.filter((m) => m && typeof m.id === "string") : [];
+  }
+  function singleWindow(id, messageId, rows) {
+    const target = rows.find((m) => m.id === messageId);
+    const next = target && Number.isInteger(target.rowid) && rows.find((m) => m.rowid === target.rowid + 1);
+    if (next && typeof next.createdAt === "string" && Number.isFinite(Date.parse(next.createdAt))) {
+      const cursor = `${next.createdAt}|${encodeURIComponent(next.id)}`;
+      return `/api/chats/${encodeURIComponent(id)}/messages?limit=1&before=${encodeURIComponent(cursor)}`;
+    }
+    return recentPath(id);
+  }
+
   // src/data.ts
   var record = (value) => {
     try {
@@ -9102,6 +9120,10 @@
     const cache = /* @__PURE__ */ new Map();
     const controllers = /* @__PURE__ */ new Map();
     let disposed = false;
+    const messagesByChat = /* @__PURE__ */ new Map();
+    const staleHostByChat = /* @__PURE__ */ new Map();
+    const missingByChat = /* @__PURE__ */ new Map();
+    const totals = /* @__PURE__ */ new Map();
     async function get(path, ttl = 15e3) {
       if (disposed || !path.startsWith("/api/") || path.includes("://")) throw Error("API unavailable");
       const old = cache.get(path);
@@ -9129,23 +9151,64 @@
       return entry.promise;
     }
     function invalidate(all = false) {
-      for (const path of cache.keys()) if (all || /\/messages$/.test(path)) cache.delete(path);
+      for (const path of cache.keys()) if (all || /\/messages(?:\?|$)/.test(path)) cache.delete(path);
       for (const [c, timer] of controllers) {
         window2.clearTimeout(timer);
         c.abort();
       }
       controllers.clear();
+      messagesByChat.clear();
+      missingByChat.clear();
+      staleHostByChat.clear();
+      totals.clear();
     }
-    async function snapshot(id) {
-      const [chat, messages, rules, presets] = await Promise.all([
+    function forget(id, ids) {
+      let stale = staleHostByChat.get(id);
+      if (!stale) {
+        stale = /* @__PURE__ */ new Set();
+        staleHostByChat.set(id, stale);
+      }
+      for (const mid of ids) stale.add(mid);
+      for (const mid of ids) {
+        messagesByChat.get(id)?.delete(mid);
+        missingByChat.get(id)?.delete(mid);
+      }
+      if (ids.length) cache.delete(recentPath(id));
+    }
+    async function snapshot(id, visible, poll = false) {
+      let known = messagesByChat.get(id);
+      if (!known) {
+        known = /* @__PURE__ */ new Map();
+        messagesByChat.set(id, known);
+      }
+      let missing = missingByChat.get(id);
+      if (!missing) {
+        missing = /* @__PURE__ */ new Set();
+        missingByChat.set(id, missing);
+      }
+      const loaded = hostMessages(window2, id);
+      for (const m of loaded) if (visible.includes(m.id) && !known.has(m.id) && !staleHostByChat.get(id)?.has(m.id)) known.set(m.id, m);
+      const needsMessages = poll || visible.some((mid) => !known.has(mid) && !missing.has(mid));
+      const [chat, recent, rules, presets] = await Promise.all([
         get(`/api/chats/${encodeURIComponent(id)}`),
-        get(`/api/chats/${encodeURIComponent(id)}/messages`, 1500),
+        needsMessages ? get(recentPath(id), poll ? 0 : 1500) : [],
         get("/api/regex-scripts"),
         get("/api/prompts")
       ]);
-      if (chat?.id !== id || !Array.isArray(messages) || !Array.isArray(rules) || !Array.isArray(presets)) throw Error("Invalid API shape");
+      if (chat?.id !== id || !Array.isArray(recent) || !Array.isArray(rules) || !Array.isArray(presets)) throw Error("Invalid API shape");
+      for (const m of recent) if (visible.includes(m.id)) known.set(m.id, m);
+      if (needsMessages) {
+        for (const mid of visible) if (!known.has(mid)) missing.add(mid);
+      }
+      if (recent.length) totals.set(id, recent.at(-1).rowid);
+      if (!Number.isInteger(totals.get(id))) {
+        const count = await get(`/api/chats/${encodeURIComponent(id)}/message-count`);
+        if (!Number.isInteger(count?.count)) throw Error("Invalid message count");
+        totals.set(id, count.count);
+      }
+      const messages = visible.map((mid) => known.get(mid)).filter(Boolean);
       const bySwipe = new Map(messages.map((m) => [`${id}:${m.id}:${m.activeSwipeIndex ?? 0}`, m]));
-      return { chat, messages, rules, presets, bySwipe };
+      return { chat, messages, rules, presets, bySwipe, total: totals.get(id) };
     }
     async function resolver(chat, message) {
       const seed = `${message.id}:${message.activeSwipeIndex ?? 0}`;
@@ -9185,7 +9248,7 @@
       };
       return chat.mode === "conversation" ? (value) => createMessageMacroResolver(context, { randomSeed: seed })(value) : createMessageMacroResolver(context, { randomSeed: seed });
     }
-    return { get, snapshot, resolver, invalidate, dispose() {
+    return { get, snapshot, resolver, invalidate, forget, dispose() {
       disposed = true;
       invalidate(true);
       cache.clear();
@@ -9533,24 +9596,52 @@ button[${OWN}][aria-busy=true]::after{animation:translation-regex-pulse .8s infi
     if (stack.length) ranges.push([start2, text2.length]);
     return ranges;
   }
-  function splitTranslation(text2, limit = 3e3) {
+  function splitTranslation(text2, limit = 3200) {
     if (!Number.isInteger(limit) || limit < 32) throw Error("Invalid chunk limit");
     const ranges = tagRanges(text2), chunks = [];
     const safe = (n) => !ranges.some(([a, b]) => a < n && n < b);
-    let start2 = 0;
-    while (start2 < text2.length) {
-      let end = Math.min(start2 + limit, text2.length);
-      if (end < text2.length) {
-        const slice = text2.slice(start2, end);
-        const boundary = (pattern) => [...slice.matchAll(pattern)].map((m) => start2 + m.index + m[0].length).filter((n) => n > start2 && safe(n)).at(-1);
-        end = boundary(/\n[ \t]*\n+/g) ?? boundary(/[.!?。！？]["'”’»)]*\s+/g) ?? boundary(/\s+/g) ?? end;
-        const block = ranges.find(([a, b]) => a < end && end < b);
-        if (block) end = block[0] > start2 ? block[0] : block[1];
-        if (end < text2.length && /[\uDC00-\uDFFF]/.test(text2[end])) end--;
+    const boundaries = [
+      /(?:\r?\n)[ \t]*(?:\r?\n)+/g,
+      /\r?\n/g,
+      /[.!?。！？]["'”’»)]*(?:\s+|(?=[^\s]))/g,
+      /[ \t]+/g
+    ];
+    const units = [];
+    function divide(start2, end, level) {
+      if (end - start2 <= limit) {
+        units.push(text2.slice(start2, end));
+        return;
       }
-      chunks.push(text2.slice(start2, end));
-      start2 = end;
+      if (level < boundaries.length) {
+        let previous = start2;
+        for (const match of text2.slice(start2, end).matchAll(boundaries[level])) {
+          const at = start2 + match.index + match[0].length;
+          if (!safe(at)) continue;
+          divide(previous, at, level + 1);
+          previous = at;
+        }
+        if (previous < end) divide(previous, end, level + 1);
+        return;
+      }
+      while (start2 < end) {
+        let at = Math.min(start2 + limit, end);
+        const block = ranges.find(([a, b]) => a < at && at < b);
+        if (block) at = block[0] > start2 ? block[0] : block[1];
+        if (at < end && /[\uD800-\uDBFF]/.test(text2[at - 1]) && /[\uDC00-\uDFFF]/.test(text2[at])) at--;
+        units.push(text2.slice(start2, at));
+        start2 = at;
+      }
     }
+    divide(0, text2.length, 0);
+    let current = "";
+    for (const part of units) {
+      if (current && current.length + part.length > limit) {
+        chunks.push(current);
+        current = "";
+      }
+      current += part;
+    }
+    if (current) chunks.push(current);
     return chunks;
   }
   function protectTags(source) {
@@ -9558,7 +9649,7 @@ button[${OWN}][aria-busy=true]::after{animation:translation-regex-pulse .8s infi
     while (source.includes(prefix)) prefix += "X";
     const tags = [];
     const token = (i) => `[[${prefix}${i}]]`;
-    const text2 = source.replace(markup(), (tag) => {
+    const text2 = source.replace(new RegExp(`${markup().source}|(?:\\r?\\n)[ \\t\\r\\n]*`, "g"), (tag) => {
       tags.push(tag);
       return token(tags.length - 1);
     });
@@ -9670,7 +9761,7 @@ button[${OWN}][aria-busy=true]::after{animation:translation-regex-pulse .8s infi
     }
     async function verify(j) {
       check(j);
-      const messages = await request(`/api/chats/${encodeURIComponent(j.chatId)}/messages`, "GET", void 0, j.controller.signal);
+      const messages = await request(j.window, "GET", void 0, j.controller.signal);
       check(j);
       const current = Array.isArray(messages) && messages.find((m) => m.id === j.messageId);
       if (!current || signature(current) !== j.signature) throw Error("\uC6D0\uBB38\xB7\uC2A4\uC640\uC774\uD504 \uB610\uB294 \uBC88\uC5ED\uC774 \uBCC0\uACBD\uB428 \xB7 \uC800\uC7A5\uD558\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4");
@@ -9692,7 +9783,7 @@ button[${OWN}][aria-busy=true]::after{animation:translation-regex-pulse .8s infi
       attempted.add(`${j.chatId}:${j.messageId}:${JSON.stringify([j.source, j.swipe, text2])}`);
       j.parts = [];
       saved(j, text2);
-      emit(j, `\uBC88\uC5ED \uC800\uC7A5 \uC644\uB8CC${j.fallbacks ? ` \xB7 \uD0DC\uADF8 \uBCF5\uC6D0 \uC2E4\uD328 ${j.fallbacks}\uAC1C \uCCAD\uD06C\uB294 \uC6D0\uBB38 \uBCF4\uC874` : ""}`, false);
+      emit(j, `\uBC88\uC5ED \uC800\uC7A5 \uC644\uB8CC${j.fallbacks ? ` \xB7 \uBC88\uC5ED \uC2E4\uD328 ${j.fallbacks}\uAC1C \uCCAD\uD06C\uB294 \uC6D0\uBB38 \uBCF4\uC874` : ""}`, false);
     }
     async function execute(messageId, mode, automatic = false) {
       if (disposed || job?.busy || job?.parts.length) return;
@@ -9702,9 +9793,10 @@ button[${OWN}][aria-busy=true]::after{animation:translation-regex-pulse .8s infi
       job = j;
       emit(j, "\uBC88\uC5ED \uC900\uBE44 \uC911", true);
       try {
+        j.window = singleWindow(chatId, messageId, hostMessages(window2, chatId));
         const [chat, messages, generation] = await Promise.all([
           request(`/api/chats/${encodeURIComponent(chatId)}`, "GET", void 0, j.controller.signal),
-          request(`/api/chats/${encodeURIComponent(chatId)}/messages`, "GET", void 0, j.controller.signal),
+          request(j.window, "GET", void 0, j.controller.signal),
           request(`/api/generate/status/${encodeURIComponent(chatId)}`, "GET", void 0, j.controller.signal)
         ]);
         check(j);
@@ -9715,6 +9807,9 @@ button[${OWN}][aria-busy=true]::after{animation:translation-regex-pulse .8s infi
         if (automatic && (extra.translationHidden === true || !sourceMatches(message) || !truncation(message.content, raw).suspected)) {
           emit(j, "\uCD5C\uC2E0 \uBC88\uC5ED\uC740 \uC790\uB3D9 \uC774\uC5B4 \uBC88\uC5ED \uB300\uC0C1\uC774 \uC544\uB2D9\uB2C8\uB2E4", false);
           return;
+        }
+        if (!j.window.includes("&before=")) {
+          j.window = messages.at(-1)?.id === messageId ? `/api/chats/${encodeURIComponent(chatId)}/messages?limit=1` : singleWindow(chatId, messageId, messages);
         }
         j.source = message.content;
         j.swipe = message.activeSwipeIndex ?? 0;
@@ -9739,14 +9834,38 @@ button[${OWN}][aria-busy=true]::after{animation:translation-regex-pulse .8s infi
           await verify(j);
           emit(j, `\uBC88\uC5ED \uC911 \xB7 \uCCAD\uD06C ${i + 1}/${chunks.length}`, true);
           const chunk = chunks[i], protectedText = protectTags(chunk);
-          if (protectedText.text.length > (config.provider === "google" ? 5e3 : 5e4)) throw Error("\uD0DC\uADF8 \uBE14\uB85D\uC774 \uACF5\uAE09\uC790 \uD55C\uB3C4\uB97C \uB118\uC2B5\uB2C8\uB2E4 \xB7 \uD0DC\uADF8\uB97C \uB098\uB204\uC9C0 \uC54A\uACE0 \uC911\uB2E8\uD588\uC2B5\uB2C8\uB2E4");
-          const response = await request("/api/translate", "POST", { ...config, text: protectedText.text }, j.controller.signal);
-          check(j);
-          if (typeof response?.translatedText !== "string" || !response.translatedText.trim()) throw Error("\uBE44\uC5B4 \uC788\uB294 \uBC88\uC5ED \uC751\uB2F5");
-          const restored = protectedText.restore(response.translatedText);
-          if (restored.fallback) j.fallbacks++;
-          const leading = /^\s*/.exec(chunk)[0], trailing = /\s*$/.exec(chunk)[0];
-          j.parts.push(leading + restored.text.trim() + trailing);
+          if (!chunk.trim()) {
+            j.parts.push(chunk);
+            continue;
+          }
+          let translated;
+          const withinLimit = protectedText.text.length <= (config.provider === "google" ? 5e3 : 5e4);
+          for (let attempt2 = 0; withinLimit && attempt2 < (mode === "split" ? 2 : 1); attempt2++) {
+            if (attempt2) {
+              await verify(j);
+              emit(j, `\uBC88\uC5ED \uC7AC\uC2DC\uB3C4 \xB7 \uCCAD\uD06C ${i + 1}/${chunks.length}`, true);
+            }
+            try {
+              const response = await request("/api/translate", "POST", { ...config, text: protectedText.text }, j.controller.signal);
+              check(j);
+              if (typeof response?.translatedText !== "string" || !response.translatedText.trim()) throw Error("\uBE44\uC5B4 \uC788\uB294 \uBC88\uC5ED \uC751\uB2F5");
+              const restored = protectedText.restore(response.translatedText);
+              if (restored.fallback || !restored.text.trim()) throw Error("\uD0DC\uADF8\xB7\uBB38\uB2E8 \uBCF5\uC6D0 \uC2E4\uD328");
+              const leading = /^\s*/.exec(chunk)[0], trailing = /\s*$/.exec(chunk)[0];
+              translated = leading + restored.text.trim() + trailing;
+              break;
+            } catch (error) {
+              check(j);
+              if (mode !== "split") throw error;
+            }
+          }
+          if (translated === void 0) {
+            if (mode !== "split") throw Error("\uD0DC\uADF8 \uBE14\uB85D\uC774 \uACF5\uAE09\uC790 \uD55C\uB3C4\uB97C \uB118\uC2B5\uB2C8\uB2E4");
+            j.fallbacks++;
+            translated = chunk;
+            emit(j, `\uCCAD\uD06C ${i + 1}/${chunks.length} \uC2E4\uD328 \xB7 \uC6D0\uBB38 \uBCF4\uC874`, true);
+          }
+          j.parts.push(translated);
         }
         await persist(j);
       } catch (error) {
@@ -9820,6 +9939,8 @@ button[${OWN}][aria-busy=true]::after{animation:translation-regex-pulse .8s infi
     let disposed = false, epoch = 0, timer, interval, running = false, rerun = false;
     let currentId = activeChatId(window2), store, queryCache;
     let offStore, offQuery, lastStore = "";
+    let pollTranslation = false, completionRead = false, wasGenerating = false;
+    const domStamps = /* @__PURE__ */ new Map();
     const mounted = /* @__PURE__ */ new Map();
     const life = new window2.AbortController();
     const choices = /* @__PURE__ */ new Map(), intents = /* @__PURE__ */ new Map(), requested = /* @__PURE__ */ new Set();
@@ -9962,7 +10083,9 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
       requested.add(job.messageId);
       invalidate(true);
       try {
-        Promise.resolve(window2.__MARINARA_HOST__?.queryClient?.invalidateQueries?.({ queryKey: ["chats", "messages", job.chatId] })).catch(() => {
+        window2.__MARINARA_HOST__?.queryClient?.setQueryData?.(messageKey(job.chatId), (old) => {
+          const update = (m) => m.id === job.messageId && (m.activeSwipeIndex ?? 0) === job.swipe ? { ...m, extra: { ...record(m.extra), translation: text2, translationSource: job.source, translationHidden: false } } : m;
+          return Array.isArray(old) ? old.map(update) : old?.pages ? { ...old, pages: old.pages.map((page) => page.map(update)) } : old;
         });
       } catch {
       }
@@ -10049,7 +10172,6 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
     const observer = new window2.MutationObserver((records) => {
       if (records.some(relevant) || [...mounted].some(([n, s]) => !n.isConnected || !s.wrapper.isConnected)) {
         epoch++;
-        data.invalidate();
         restoreAll();
         schedule();
       }
@@ -10061,7 +10183,10 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
         store = host?.stores?.chat;
         const consume = (s) => {
           const signature = JSON.stringify([s.activeChatId, s.activeChat, s.isStreaming, s.streamingChatId]);
-          if (lastStore && lastStore !== signature) invalidate(true);
+          if (lastStore && lastStore !== signature) {
+            completionRead = true;
+            invalidate(true);
+          }
           lastStore = signature;
         };
         if (store?.subscribe) {
@@ -10097,6 +10222,10 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
         const id = activeChatId(window2);
         if (id !== currentId) {
           currentId = id;
+          domStamps.clear();
+          pollTranslation = false;
+          completionRead = false;
+          wasGenerating = false;
           savedTranslations.clear();
           choices.clear();
           intents.clear();
@@ -10143,14 +10272,31 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
           if (typeof generation?.active !== "boolean") throw Error("Invalid generation status");
           if (!current(version, id)) return;
           if (generation.active || generation.translating) {
+            wasGenerating = true;
             restoreAll();
             for (const mid of actions.ids()) actions.state(mid, "busy", "\uC0DD\uC131/\uBC88\uC5ED \uC911 \xB7 \uC644\uB8CC \uD6C4 \uD655\uC778");
             status.textContent = "\uC0DD\uC131/\uBC88\uC5ED \uC911 \xB7 \uC6D0\uB798 \uBC88\uC5ED\uBB38 \uD45C\uC2DC";
             return;
           }
         }
-        const snapshot = await data.snapshot(id);
+        if (wasGenerating) {
+          wasGenerating = false;
+          completionRead = true;
+          data.invalidate();
+        }
+        const visible = roots.map((root2) => root2.getAttribute("data-message-id")).filter((mid) => mid && !mid.startsWith("__"));
+        const changed = [];
+        for (const root2 of roots) {
+          const mid = root2.getAttribute("data-message-id");
+          const stamp = [...root2.querySelectorAll(".translation-text,.mari-message-content")].filter((n) => !n.hasAttribute(`data-${KEY}`)).map((n) => n.innerHTML).join("\0");
+          if (domStamps.has(mid) && domStamps.get(mid) !== stamp) changed.push(mid);
+          domStamps.set(mid, stamp);
+        }
+        data.forget(id, changed);
+        const snapshot = await data.snapshot(id, visible, completionRead);
         if (!current(version, id)) return;
+        completionRead = false;
+        pollTranslation = false;
         if (jobs.busy) return;
         const { chat, messages, rules, presets } = snapshot;
         if (chat.mode !== "roleplay" && !(chat.mode === "conversation" && settings.conversation)) {
@@ -10182,6 +10328,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
             intents.delete(messageId);
           }
           const messageExtra = record(message.extra);
+          if (settings.autoContinue && !messageExtra.translationHidden && message.rowid >= snapshot.total - 2 && (!messageExtra.translation || !sourceMatches(message))) pollTranslation = true;
           if (settings.autoContinue && !messageExtra.translationHidden && sourceMatches(message) && typeof messageExtra.translation === "string" && truncation(message.content, messageExtra.translation).suspected && jobs.canAuto(id, message)) {
             void jobs.execute(messageId, "continue", true);
             return;
@@ -10197,6 +10344,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
           const swipe = snapshot.bySwipe.get(key);
           const extra = record(swipe.extra), raw = extra.translation;
           if (typeof raw !== "string" || !raw) {
+            if (message.rowid >= snapshot.total - 2 && !extra.translationHidden) pollTranslation = true;
             skip("API\uC5D0 \uC800\uC7A5\uB41C \uBC88\uC5ED\uBB38 \uC5C6\uC74C \xB7 \uB2E4\uC74C \uD655\uC778 \uB54C \uC7AC\uC2DC\uB3C4");
             continue;
           }
@@ -10205,6 +10353,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
             continue;
           }
           if (extra.translationSource !== void 0 && !sourceMatches(message, extra)) {
+            if (message.rowid >= snapshot.total - 2 && !extra.translationHidden) pollTranslation = true;
             skip("\uD604\uC7AC \uC2A4\uC640\uC774\uD504\uC640 \uBC88\uC5ED \uC6D0\uBB38 \uBD88\uC77C\uCE58");
             continue;
           }
@@ -10221,6 +10370,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
           }
           const node = nodes[0];
           if (!separate.length && [...node.parentElement.children].some((n) => n !== node && !n.hasAttribute(`data-${KEY}`) && n.classList.contains("border-t") && n.querySelector("span") && !n.querySelector(".translation-text"))) {
+            if (message.rowid >= snapshot.total - 2 && !extra.translationHidden) pollTranslation = true;
             skip("\uBC88\uC5ED \uC9C4\uD589 \uC911 \xB7 \uC6D0\uB798 \uD45C\uC2DC \uC720\uC9C0");
             continue;
           }
@@ -10244,7 +10394,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
           const resolve = /\{\{/.test(raw + rules.map((r) => `${r.findRegex}${r.replaceString}${r.trimStrings}`).join("")) ? await data.resolver(chat, message) : createMessageMacroResolver({ userName: "You", primaryCharacter: { name: "Assistant" } }, { randomSeed: `${message.id}:${message.activeSwipeIndex ?? 0}` });
           if (!current(version, id)) return;
           const output = resolve(formatTextQuotes(applyScripts(raw, scripts, "ai_output", {
-            depth: messages.length - 1 - index,
+            depth: snapshot.total - message.rowid,
             resolveMacros: resolve,
             scopedMode,
             characterId: message.characterId,
@@ -10330,6 +10480,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
     api.onCleanup(dispose);
     observe();
     interval = window2.setInterval(() => {
+      if (pollTranslation) completionRead = true;
       void run();
     }, 2e3);
     void run();

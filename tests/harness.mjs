@@ -5,7 +5,9 @@ export const rule = (patch = {}) => ({ id: 'r', name: 'DEM sample', enabled: 'tr
   findRegex: '<status>([^<]*)</status>', replaceString: '<style>.dem{color:rgb(1,2,3);border:1px solid}</style><section class="dem"><strong>$1</strong></section>',
   minDepth: null, maxDepth: null, ...patch });
 export const message = (patch = {}) => ({ id: 'm', chatId: 'c', role: 'assistant', characterId: 'a', activeSwipeIndex: 0, content: 'original',
+  createdAt: '2026-01-01T00:00:00.000Z',
   extra: JSON.stringify({ translation: '<status>체력 90</status>', translationSource: 'original' }), ...patch });
+function assertBounded(limit) { if (!Number.isInteger(limit) || limit < 1 || limit > 3) throw Error('Unbounded messages request'); }
 export const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 export async function harness(options = {}) {
   const dom = new JSDOM('<!doctype html><body><main data-message-id="m"><div class="translation-text whitespace-pre-wrap"><p>체력 90</p></div></main></body>',
@@ -17,13 +19,21 @@ export async function harness(options = {}) {
   const nativeTimeout = w.setTimeout.bind(w), nativeClear = w.clearTimeout.bind(w);
   w.setTimeout = (fn, ms) => { const id = nativeTimeout(() => { timers.delete(id); fn(); }, ms); timers.add(id); return id; };
   w.clearTimeout = id => { timers.delete(id); nativeClear(id); };
+  const intervalFns = new Map();
   const nativeInterval = w.setInterval.bind(w), nativeClearInterval = w.clearInterval.bind(w);
-  w.setInterval = (fn, ms) => { const id = nativeInterval(fn, ms); intervals.add(id); return id; };
-  w.clearInterval = id => { intervals.delete(id); nativeClearInterval(id); };
+  w.setInterval = (fn, ms) => { const id = nativeInterval(fn, ms); intervals.add(id); intervalFns.set(id, fn); return id; };
+  w.clearInterval = id => { intervals.delete(id); intervalFns.delete(id); nativeClearInterval(id); };
   const fixture = { chat: { id: 'c', mode: 'roleplay', metadata: '{}', characterIds: '[]', promptPresetId: null }, messages: [message()], rules: [rule()], presets: [],
     status: { active: false, translating: false }, fail: false, hold: null, ...options.fixture };
   let state = { activeChatId: 'c', activeChat: fixture.chat, isStreaming: false, streamingChatId: null };
   if (options.store !== false) w.__MARINARA_HOST__ = { stores: { chat: { getState: () => state, subscribe(fn) { callbacks.add(fn); return () => callbacks.delete(fn); } } } };
+  const queryCallbacks = new Set();
+  let loaded = options.loaded ? { pages: [fixture.messages.map((m, i) => ({ ...structuredClone(m), rowid: i + 1 }))], pageParams: [undefined] } : undefined;
+  if (options.loaded) w.__MARINARA_HOST__.queryClient = {
+    getQueryData: () => loaded,
+    setQueryData: (key, update) => { loaded = update(loaded); },
+    getQueryCache: () => ({ subscribe(fn) { queryCallbacks.add(fn); return () => queryCallbacks.delete(fn); } }),
+  };
   const fetch = async (path, init) => {
     requests.push({ path, init });
     if (!path.startsWith('/api/')) throw Error('Forbidden request');
@@ -34,7 +44,21 @@ export async function harness(options = {}) {
     }
     const respond = () => {
       if (fixture.fail || init.signal?.aborted) throw Error('Fake failure');
-      const routes = { '/api/chats/c': fixture.chat, '/api/chats/c/messages': fixture.messages, '/api/regex-scripts': fixture.rules,
+      const url = new URL(path, 'http://fixture.invalid');
+      if (url.pathname === '/api/chats/c/messages') {
+        const limit = Number(url.searchParams.get('limit'));
+        assertBounded(limit);
+        let rows = fixture.messages.map((m, i) => ({ ...m, rowid: i + 1 }));
+        const before = url.searchParams.get('before');
+        if (before) {
+          const at = before.indexOf('|'), cursorId = decodeURIComponent(before.slice(at + 1));
+          const index = rows.findIndex(m => m.id === cursorId && m.createdAt === before.slice(0, at));
+          if (index < 0) return { ok: false, status: 400 };
+          rows = rows.slice(0, index);
+        }
+        return { ok: true, json: async () => structuredClone(rows.slice(-limit)) };
+      }
+      const routes = { '/api/chats/c': fixture.chat, '/api/chats/c/message-count': { count: fixture.messages.length }, '/api/regex-scripts': fixture.rules,
         '/api/prompts': fixture.presets, '/api/generate/status/c': fixture.status,
         '/api/characters/a': { id: 'a', data: JSON.stringify({ name: 'Sola', description: '태양' }) },
         '/api/characters/personas/u': { id: 'u', name: '독자' }, ...(fixture.routes || {}) };
@@ -57,6 +81,12 @@ export async function harness(options = {}) {
     get wrapper() { return w.document.querySelector('[data-translation_regex_me]'); },
     get body() { return this.wrapper?.shadowRoot.querySelector('.translation-content'); },
     get ui() { return w.document.getElementById('translation_regex_me')?.shadowRoot; },
+    async poll() { for (const fn of intervalFns.values()) fn(); await settle(); },
+    async querySuccess() {
+      loaded = { pages: [fixture.messages.map((m, i) => ({ ...structuredClone(m), rowid: i + 1 }))], pageParams: [undefined] };
+      for (const fn of queryCallbacks) fn({ type: 'updated', action: { type: 'success' }, query: { queryKey: ['chats', 'messages', 'c'] } });
+      await settle();
+    },
     setState(patch) { state = { ...state, ...patch }; for (const cb of callbacks) cb(state); },
     async refresh() { w.translation_regex_me.refresh(); await settle(); },
     stop() { for (const fn of cleanups) fn(); },

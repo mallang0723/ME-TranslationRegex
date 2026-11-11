@@ -7,8 +7,8 @@ import { packageZip } from '../scripts/package.mjs';
 import { harness } from './harness.mjs';
 test('manifest matches personal extension precedent and required permission/runtime/key', () => {
   const m = JSON.parse(readFileSync('manifest.json')); assert.equal(m.kind, 'marinara.personal-extension');
-  assert.equal(m.version, 1); assert.equal(m.config.version, '0.3.2');
-  assert.equal(JSON.parse(readFileSync('package.json')).version, '0.3.2'); assert.equal(m.config.runtime, 'client'); assert.equal(m.config.jsPath, 'extension.js');
+  assert.equal(m.version, 1); assert.equal(m.config.version, '0.3.3');
+  assert.equal(JSON.parse(readFileSync('package.json')).version, '0.3.3'); assert.equal(m.config.runtime, 'client'); assert.equal(m.config.jsPath, 'extension.js');
   assert.deepEqual(m.config.capabilities, ['full_page_access']); assert.equal(m.config.enabled, false);
   assert.ok(m.config.description.includes('translation_regex_me'));
 });

@@ -32,7 +32,7 @@ test('rerender node replacement removes orphan and mounts on new original', asyn
 test('same original node translation update invalidates cached API data', async t => {
   const h = await withHost(t); h.fixture.messages[0].extra = { translation: '<status>체력 45</status>', translationSource: 'original' };
   h.original.textContent = '체력 45'; await h.settle(); assert.equal(h.body.textContent, '체력 45');
-  assert.ok(h.requests.filter(r => r.path.endsWith('/messages')).length >= 2);
+  assert.ok(h.requests.filter(r => r.path.includes('/messages?')).length >= 2);
 });
 test('swipe change uses active swipe API extra and discards previous panel', async t => {
   const h = await withHost(t); h.fixture.messages[0] = message({ activeSwipeIndex: 1, content: 'swipe 1', extra: JSON.stringify({ translation: '<status>스와이프 1</status>', translationSource: 'swipe 1' }) });
@@ -123,7 +123,7 @@ test('one messages request is shared across multiple translation nodes', async t
   const h = await withHost(t, { html: '<main data-message-id="m"><div class="translation-text">체력 90</div></main><main data-message-id="m2"><div class="translation-text">체력 90</div></main>',
     fixture: { messages: [message(), message({ id: 'm2' })] } });
   assert.equal(h.w.document.querySelectorAll('[data-translation_regex_me]').length, 2);
-  assert.equal(h.requests.filter(r => r.path.endsWith('/messages')).length, 1);
+  assert.equal(h.requests.filter(r => r.path.includes('/messages?')).length, 1);
 });
 test('disabled startup never requests API data', async t => {
   const h = await withHost(t, { settings: { enabled: false } }); assert.equal(h.requests.length, 0); assert.equal(h.wrapper, null);
@@ -136,10 +136,10 @@ test('HTTP storage unavailable fails open without UUID or network fallback', asy
   Object.defineProperty(h.w, 'localStorage', { get() { throw Error('Storage disabled'); } });
   h.w.eval((await import('node:fs')).readFileSync('dist/extension.js', 'utf8')); await h.settle(); assert.equal(h.wrapper, null); assert.equal(h.original.style.display, '');
 });
-test('same-text swipe mutation is detected by periodic API refresh', async t => {
+test('same-text swipe change is detected by an explicit host refresh', async t => {
   const h = await withHost(t); const before = h.wrapper;
   h.fixture.messages[0] = message({ activeSwipeIndex: 1, extra: { translation: '<status>새 스와이프</status>', translationSource: 'original' } });
-  await delay(2100); assert.equal(h.body.textContent, '새 스와이프'); assert.equal(before.isConnected, false);
+  await h.refresh(); assert.equal(h.body.textContent, '새 스와이프'); assert.equal(before.isConnected, false);
 });
 test('cleanup clears pending request deadlines even when fetch ignores abort', async t => {
   let resolve; const pending = new Promise(r => resolve = r);

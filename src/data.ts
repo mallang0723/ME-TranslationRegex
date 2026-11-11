@@ -1,5 +1,6 @@
 import { getChatCharacterIds, parseCharacterMacroData, createMessageMacroResolver } from './macros';
 import { parseChoiceOptions, resolveChoiceVariableValue } from '../vendor/upstream/preset-choices';
+import { hostMessages, recentPath } from './message-window';
 import { seededUnitRandom } from '../vendor/upstream/macro-engine';
 export const record = (value: any): Record<string, any> => {
   try { const r = typeof value === 'string' ? JSON.parse(value) : value; return r && typeof r === 'object' && !Array.isArray(r) ? r : {}; }
@@ -26,6 +27,10 @@ export function createData(api: any, window: any) {
   const cache = new Map<string, { time: number, promise: Promise<any> }>();
   const controllers = new Map<AbortController, number>();
   let disposed = false;
+  const messagesByChat = new Map<string, Map<string, any>>();
+  const staleHostByChat = new Map<string, Set<string>>();
+  const missingByChat = new Map<string, Set<string>>();
+  const totals = new Map<string, number>();
   async function get(path: string, ttl = 15000) {
     if (disposed || !path.startsWith('/api/') || path.includes('://')) throw Error('API unavailable');
     const old = cache.get(path);
@@ -49,20 +54,45 @@ export function createData(api: any, window: any) {
     return entry.promise;
   }
   function invalidate(all = false) {
-    for (const path of cache.keys()) if (all || /\/messages$/.test(path)) cache.delete(path);
+    for (const path of cache.keys()) if (all || /\/messages(?:\?|$)/.test(path)) cache.delete(path);
     for (const [c, timer] of controllers) { window.clearTimeout(timer); c.abort(); }
     controllers.clear();
+    messagesByChat.clear(); missingByChat.clear(); staleHostByChat.clear(); totals.clear();
   }
-  async function snapshot(id: string) {
-    // Below the 2s poll interval: request latency must not keep the first completion poll on stale data.
-    const [chat, messages, rules, presets] = await Promise.all([
-      get(`/api/chats/${encodeURIComponent(id)}`), get(`/api/chats/${encodeURIComponent(id)}/messages`, 1500),
+  function forget(id: string, ids: string[]) {
+    let stale = staleHostByChat.get(id);
+    if (!stale) { stale = new Set(); staleHostByChat.set(id, stale); }
+    for (const mid of ids) stale.add(mid);
+    for (const mid of ids) { messagesByChat.get(id)?.delete(mid); missingByChat.get(id)?.delete(mid); }
+    // Only a changed/missing visible record may cause a bounded read on the next scan.
+    if (ids.length) cache.delete(recentPath(id));
+  }
+  async function snapshot(id: string, visible: string[], poll = false) {
+    let known = messagesByChat.get(id);
+    if (!known) { known = new Map(); messagesByChat.set(id, known); }
+    let missing = missingByChat.get(id);
+    if (!missing) { missing = new Set(); missingByChat.set(id, missing); }
+    const loaded = hostMessages(window, id);
+    for (const m of loaded) if (visible.includes(m.id) && !known.has(m.id) && !staleHostByChat.get(id)?.has(m.id)) known.set(m.id, m);
+    const needsMessages = poll || visible.some(mid => !known!.has(mid) && !missing!.has(mid));
+    const [chat, recent, rules, presets] = await Promise.all([
+      get(`/api/chats/${encodeURIComponent(id)}`),
+      needsMessages ? get(recentPath(id), poll ? 0 : 1500) : [],
       get('/api/regex-scripts'), get('/api/prompts'),
     ]);
-    if (chat?.id !== id || !Array.isArray(messages) || !Array.isArray(rules) || !Array.isArray(presets)) throw Error('Invalid API shape');
-    // chats.storage.ts:2230-2242 returns chronological rows; 3533-3542 copies active swipe extra to message.extra.
+    if (chat?.id !== id || !Array.isArray(recent) || !Array.isArray(rules) || !Array.isArray(presets)) throw Error('Invalid API shape');
+    for (const m of recent) if (visible.includes(m.id)) known.set(m.id, m);
+    if (needsMessages) for (const mid of visible) if (!known.has(mid)) missing.add(mid);
+    // rowid is the absolute chronological position, not the number of mounted DOM nodes.
+    if (recent.length) totals.set(id, recent.at(-1).rowid);
+    if (!Number.isInteger(totals.get(id))) {
+      const count = await get(`/api/chats/${encodeURIComponent(id)}/message-count`);
+      if (!Number.isInteger(count?.count)) throw Error('Invalid message count');
+      totals.set(id, count.count);
+    }
+    const messages = visible.map(mid => known!.get(mid)).filter(Boolean);
     const bySwipe = new Map(messages.map((m: any) => [`${id}:${m.id}:${m.activeSwipeIndex ?? 0}`, m]));
-    return { chat, messages, rules, presets, bySwipe };
+    return { chat, messages, rules, presets, bySwipe, total: totals.get(id)! };
   }
   async function resolver(chat: any, message: any) {
     const seed = `${message.id}:${message.activeSwipeIndex ?? 0}`;
@@ -100,5 +130,5 @@ export function createData(api: any, window: any) {
       ? (value: string) => createMessageMacroResolver(context, { randomSeed: seed })(value)
       : createMessageMacroResolver(context, { randomSeed: seed });
   }
-  return { get, snapshot, resolver, invalidate, dispose() { disposed = true; invalidate(true); cache.clear(); }, cache };
+  return { get, snapshot, resolver, invalidate, forget, dispose() { disposed = true; invalidate(true); cache.clear(); }, cache };
 }

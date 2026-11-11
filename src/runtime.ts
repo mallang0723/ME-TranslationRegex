@@ -3,6 +3,7 @@ import { createMessageMacroResolver } from './macros';
 import { formatTextQuotes } from '../vendor/upstream/quote-format';
 import { createSanitizer } from './sanitize';
 import { createData, activeChatId, record, quoteFormat } from './data';
+import { messageKey } from './message-window';
 import { createActions } from './actions';
 import { createLauncher } from './launcher';
 import { createTranslationJobs, sourceMatches, truncation } from './translation';
@@ -17,6 +18,8 @@ export function start(api: any, window: any) {
   let disposed = false, epoch = 0, timer: any, interval: any, running = false, rerun = false;
   let currentId = activeChatId(window), store: any, queryCache: any;
   let offStore: any, offQuery: any, lastStore = '';
+  let pollTranslation = false, completionRead = false, wasGenerating = false;
+  const domStamps = new Map<string, string>();
   const mounted = new Map<any, any>();
   const life = new window.AbortController();
   const choices = new Map<string, boolean>(), intents = new Map<string, boolean>(), requested = new Set<string>();
@@ -95,9 +98,13 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
   }, (job: any, text: string) => {
     savedTranslations.set(job.messageId, text);
     intents.set(job.messageId, true); requested.add(job.messageId); invalidate(true);
-    // Host query cache refresh seeds translation.store from the newly persisted extras.
+    // Patch the loaded cache in memory: invalidating an infinite query refetches every page.
     try {
-      Promise.resolve(window.__MARINARA_HOST__?.queryClient?.invalidateQueries?.({ queryKey: ['chats', 'messages', job.chatId] })).catch(() => {});
+      window.__MARINARA_HOST__?.queryClient?.setQueryData?.(messageKey(job.chatId), (old: any) => {
+        const update = (m: any) => m.id === job.messageId && (m.activeSwipeIndex ?? 0) === job.swipe
+          ? { ...m, extra: { ...record(m.extra), translation: text, translationSource: job.source, translationHidden: false } } : m;
+        return Array.isArray(old) ? old.map(update) : old?.pages ? { ...old, pages: old.pages.map((page: any[]) => page.map(update)) } : old;
+      });
     } catch {}
   });
   for (const [button, mode] of [[resume, 'continue'], [split, 'split']] as const) {
@@ -158,7 +165,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
     if (records.some(relevant) || [...mounted].some(([n, s]) => !n.isConnected || !s.wrapper.isConnected)) {
       // A swipe/stream can replace React's prose before the API request completes.
       // Drop our old rendering now, rather than leaving it over the new host body.
-      epoch++; data.invalidate(); restoreAll(); schedule();
+      epoch++; restoreAll(); schedule();
     }
   });
   function connect() {
@@ -167,7 +174,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
       offStore?.(); store = host?.stores?.chat;
       const consume = (s: any) => {
         const signature = JSON.stringify([s.activeChatId, s.activeChat, s.isStreaming, s.streamingChatId]);
-        if (lastStore && lastStore !== signature) invalidate(true); lastStore = signature;
+        if (lastStore && lastStore !== signature) { completionRead = true; invalidate(true); } lastStore = signature;
       };
       if (store?.subscribe) { offStore = store.subscribe(consume); consume(store.getState()); }
     }
@@ -191,7 +198,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
     try {
       connect(); jobs.navigation();
       const id = activeChatId(window);
-      if (id !== currentId) { currentId = id; savedTranslations.clear(); choices.clear(); intents.clear(); requested.clear(); epoch++; data.invalidate(true); restoreAll(); }
+      if (id !== currentId) { currentId = id; domStamps.clear(); pollTranslation = false; completionRead = false; wasGenerating = false; savedTranslations.clear(); choices.clear(); intents.clear(); requested.clear(); epoch++; data.invalidate(true); restoreAll(); }
       quiet(() => {
         for (const [node, state] of mounted) if (!node.isConnected || !state.wrapper.isConnected) release(node);
         actions.sync();
@@ -217,10 +224,23 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
         const generation = await data.get(`/api/generate/status/${encodeURIComponent(id)}`, 1000);
         if (typeof generation?.active !== 'boolean') throw Error('Invalid generation status');
         if (!current(version, id)) return;
-        if (generation.active || generation.translating) { restoreAll(); for (const mid of actions.ids()) actions.state(mid, 'busy', '생성/번역 중 · 완료 후 확인'); status.textContent = '생성/번역 중 · 원래 번역문 표시'; return; }
+        if (generation.active || generation.translating) { wasGenerating = true; restoreAll(); for (const mid of actions.ids()) actions.state(mid, 'busy', '생성/번역 중 · 완료 후 확인'); status.textContent = '생성/번역 중 · 원래 번역문 표시'; return; }
       }
-      const snapshot = await data.snapshot(id);
+      if (wasGenerating) { wasGenerating = false; completionRead = true; data.invalidate(); }
+      const visible = roots.map(root => root.getAttribute('data-message-id')).filter((mid: string) => mid && !mid.startsWith('__'));
+      const changed: string[] = [];
+      for (const root of roots) {
+        const mid = root.getAttribute('data-message-id');
+        const stamp = [...root.querySelectorAll('.translation-text,.mari-message-content')]
+          .filter((n: any) => !n.hasAttribute(`data-${KEY}`)).map((n: any) => n.innerHTML).join('\0');
+        if (domStamps.has(mid) && domStamps.get(mid) !== stamp) changed.push(mid);
+        domStamps.set(mid, stamp);
+      }
+      data.forget(id, changed);
+      const snapshot = await data.snapshot(id, visible, completionRead);
       if (!current(version, id)) return;
+      completionRead = false;
+      pollTranslation = false;
       if (jobs.busy) return;
       const { chat, messages, rules, presets } = snapshot;
       if (chat.mode !== 'roleplay' && !(chat.mode === 'conversation' && settings.conversation)) {
@@ -240,6 +260,8 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
         const key = `${id}:${message.id}:${message.activeSwipeIndex ?? 0}`;
         if (intents.has(messageId)) { choices.set(key, intents.get(messageId)!); intents.delete(messageId); }
         const messageExtra = record(message.extra);
+        if (settings.autoContinue && !messageExtra.translationHidden && message.rowid >= snapshot.total - 2 &&
+          (!messageExtra.translation || !sourceMatches(message))) pollTranslation = true;
         if (settings.autoContinue && !messageExtra.translationHidden && sourceMatches(message) &&
           typeof messageExtra.translation === 'string' && truncation(message.content, messageExtra.translation).suspected && jobs.canAuto(id, message)) {
           void jobs.execute(messageId, 'continue', true); return;
@@ -250,11 +272,12 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
         if (!wanted) { actions.state(messageId, 'idle'); continue; }
         const swipe = snapshot.bySwipe.get(key);
         const extra = record(swipe.extra), raw = extra.translation;
-        if (typeof raw !== 'string' || !raw) { skip('API에 저장된 번역문 없음 · 다음 확인 때 재시도'); continue; }
+        if (typeof raw !== 'string' || !raw) { if (message.rowid >= snapshot.total - 2 && !extra.translationHidden) pollTranslation = true; skip('API에 저장된 번역문 없음 · 다음 확인 때 재시도'); continue; }
         if (extra.translationHidden === true) { skip('숨긴 번역문 · 원래 표시 유지'); continue; }
         // ChatMessage.tsx:2220-2223: undefined supports legacy separate translations;
         // every defined source (including null/malformed values) must match exactly.
         if (extra.translationSource !== undefined && !sourceMatches(message, extra)) {
+          if (message.rowid >= snapshot.total - 2 && !extra.translationHidden) pollTranslation = true;
           skip('현재 스와이프와 번역 원문 불일치'); continue;
         }
         // ConversationMessage.tsx:396-405,765 translates renderedContent (already processed).
@@ -274,6 +297,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
         if (!separate.length && [...node.parentElement.children].some((n: any) =>
           n !== node && !n.hasAttribute(`data-${KEY}`) && n.classList.contains('border-t') &&
           n.querySelector('span') && !n.querySelector('.translation-text'))) {
+          if (message.rowid >= snapshot.total - 2 && !extra.translationHidden) pollTranslation = true;
           skip('번역 진행 중 · 원래 표시 유지'); continue;
         }
         // 2.5.2 appends all inline command results after translated prose, including
@@ -294,7 +318,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
         // use-apply-regex.ts:192-199 and ChatMessage.tsx:2739-2750: replacement/trim/pattern, then one final display macro pass.
         // ChatRoleplaySurface.tsx:1942-1943 / ConversationView.tsx:1387: depth counts messages, newest is zero.
         const output = resolve(formatTextQuotes(applyScripts(raw, scripts, 'ai_output', {
-          depth: messages.length - 1 - index, resolveMacros: resolve, scopedMode,
+          depth: snapshot.total - message.rowid, resolveMacros: resolve, scopedMode,
           characterId: message.characterId, promptPresetId: chat.promptPresetId,
         }), quoteFormat(window)));
         if (!current(version, id) || !node.isConnected || fingerprint(node) !== stamps.get(node)) continue;
@@ -332,7 +356,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
   }
   const instance = { dispose, refresh: () => invalidate(true) };
   window[KEY] = instance; api.onCleanup(dispose); observe();
-  // Poll also sees same-text swipe changes / server updates that produce no DOM mutations.
-  interval = window.setInterval(() => { void run(); }, 2000); void run();
+  // Poll only missing latest translations; confirmed messages remain cached until host/DOM events.
+  interval = window.setInterval(() => { if (pollTranslation) completionRead = true; void run(); }, 2000); void run();
   return instance;
 }
