@@ -19,6 +19,9 @@ export function start(api: any, window: any) {
   let currentId = activeChatId(window), store: any, queryCache: any;
   let offStore: any, offQuery: any, lastStore = '';
   let pollTranslation = false, completionRead = false, wasGenerating = false;
+  let pollStarted = window.performance.now(), translationPolls = 0;
+  const resetTranslationPolling = () => { pollStarted = window.performance.now(); translationPolls = 0; };
+  const canPollTranslation = () => translationPolls < 15 && window.performance.now() - pollStarted < 30000;
   const domStamps = new Map<string, string>();
   const mounted = new Map<any, any>();
   const life = new window.AbortController();
@@ -174,6 +177,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
       offStore?.(); store = host?.stores?.chat;
       const consume = (s: any) => {
         const signature = JSON.stringify([s.activeChatId, s.activeChat, s.isStreaming, s.streamingChatId]);
+        if (s.isStreaming && (!s.streamingChatId || s.streamingChatId === s.activeChatId)) wasGenerating = true;
         if (lastStore && lastStore !== signature) { completionRead = true; invalidate(true); } lastStore = signature;
       };
       if (store?.subscribe) { offStore = store.subscribe(consume); consume(store.getState()); }
@@ -183,6 +187,8 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
       offQuery?.(); queryCache = next;
       offQuery = next?.subscribe((event: any) => {
         const key = event.query?.queryKey;
+        if (event.type === 'updated' && ['success', 'invalidate'].includes(event.action?.type) &&
+          key?.[0] === 'chats' && key?.[1] === 'messages' && key?.[2] === activeChatId(window)) resetTranslationPolling();
         if (event.type === 'updated' && ['success', 'invalidate'].includes(event.action?.type) &&
           ['chats', 'regex-scripts', 'presets', 'characters', 'personas', 'connections'].includes(key?.[0])) invalidate(true);
       });
@@ -198,7 +204,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
     try {
       connect(); jobs.navigation();
       const id = activeChatId(window);
-      if (id !== currentId) { currentId = id; domStamps.clear(); pollTranslation = false; completionRead = false; wasGenerating = false; savedTranslations.clear(); choices.clear(); intents.clear(); requested.clear(); epoch++; data.invalidate(true); restoreAll(); }
+      if (id !== currentId) { currentId = id; domStamps.clear(); pollTranslation = false; completionRead = false; wasGenerating = false; resetTranslationPolling(); savedTranslations.clear(); choices.clear(); intents.clear(); requested.clear(); epoch++; data.invalidate(true); restoreAll(); }
       quiet(() => {
         for (const [node, state] of mounted) if (!node.isConnected || !state.wrapper.isConnected) release(node);
         actions.sync();
@@ -218,7 +224,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
       const stamps = new Map(candidates.map((node: any) => [node, fingerprint(node)]));
       if (!jobs.busy) for (const mid of requested) actions.state(mid, 'busy', '적용 중');
       const state = store?.getState?.();
-      if (state?.isStreaming && (!state.streamingChatId || state.streamingChatId === id)) { restoreAll(); for (const mid of actions.ids()) actions.state(mid, 'busy', '생성 중 · 완료 후 확인'); status.textContent = '생성 중 · 원래 번역문 표시'; return; }
+      if (state?.isStreaming && (!state.streamingChatId || state.streamingChatId === id)) { wasGenerating = true; restoreAll(); for (const mid of actions.ids()) actions.state(mid, 'busy', '생성 중 · 완료 후 확인'); status.textContent = '생성 중 · 원래 번역문 표시'; return; }
       // Without the optional host store, use the same-origin status endpoint used by the precedent extension.
       if (!store) {
         const generation = await data.get(`/api/generate/status/${encodeURIComponent(id)}`, 1000);
@@ -226,7 +232,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
         if (!current(version, id)) return;
         if (generation.active || generation.translating) { wasGenerating = true; restoreAll(); for (const mid of actions.ids()) actions.state(mid, 'busy', '생성/번역 중 · 완료 후 확인'); status.textContent = '생성/번역 중 · 원래 번역문 표시'; return; }
       }
-      if (wasGenerating) { wasGenerating = false; completionRead = true; data.invalidate(); }
+      if (wasGenerating) { wasGenerating = false; completionRead = true; resetTranslationPolling(); data.invalidate(); }
       const visible = roots.map(root => root.getAttribute('data-message-id')).filter((mid: string) => mid && !mid.startsWith('__'));
       const changed: string[] = [];
       for (const root of roots) {
@@ -237,9 +243,10 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
         domStamps.set(mid, stamp);
       }
       data.forget(id, changed);
-      const snapshot = await data.snapshot(id, visible, completionRead);
-      if (!current(version, id)) return;
+      const forceRead = completionRead;
       completionRead = false;
+      const snapshot = await data.snapshot(id, visible, forceRead);
+      if (!current(version, id)) return;
       pollTranslation = false;
       if (jobs.busy) return;
       const { chat, messages, rules, presets } = snapshot;
@@ -356,7 +363,11 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
   }
   const instance = { dispose, refresh: () => invalidate(true) };
   window[KEY] = instance; api.onCleanup(dispose); observe();
-  // Poll only missing latest translations; confirmed messages remain cached until host/DOM events.
-  interval = window.setInterval(() => { if (pollTranslation) completionRead = true; void run(); }, 2000); void run();
+  // Missing latest translations get at most 15 polls / 30 seconds per completion or
+  // host message event. DOM events still recheck changed bodies after the budget expires.
+  interval = window.setInterval(() => {
+    if (pollTranslation && canPollTranslation() && !running && !jobs.busy) { translationPolls++; completionRead = true; }
+    void run();
+  }, 2000); void run();
   return instance;
 }

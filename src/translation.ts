@@ -22,17 +22,19 @@ export function tagRanges(text: string) {
   if (stack.length) ranges.push([start, text.length]);
   return ranges;
 }
-export function splitTranslation(text: string, limit = 3200): string[] {
+export function splitTranslation(text: string, limit = 3200, protectedLimit = Infinity): string[] {
   if (!Number.isInteger(limit) || limit < 32) throw Error('Invalid chunk limit');
+  if (protectedLimit !== Infinity && (!Number.isInteger(protectedLimit) || protectedLimit < 32)) throw Error('Invalid protected limit');
   const ranges = tagRanges(text), chunks: string[] = [];
   const safe = (n: number) => !ranges.some(([a, b]) => a < n && n < b);
+  const fits = (part: string) => part.length <= limit && (protectedLimit === Infinity || protectTags(part).text.length <= protectedLimit);
   // The polisher packs whole paragraphs first. Only oversized units descend to
   // lines, sentences, words and finally Unicode-safe size slices.
   const boundaries = [/(?:\r?\n)[ \t]*(?:\r?\n)+/g, /\r?\n/g,
     /[.!?。！？]["'”’»)]*(?:\s+|(?=[^\s]))/g, /[ \t]+/g];
   const units: string[] = [];
   function divide(start: number, end: number, level: number) {
-    if (end - start <= limit) { units.push(text.slice(start, end)); return; }
+    if (fits(text.slice(start, end))) { units.push(text.slice(start, end)); return; }
     if (level < boundaries.length) {
       let previous = start;
       for (const match of text.slice(start, end).matchAll(boundaries[level])) {
@@ -44,39 +46,45 @@ export function splitTranslation(text: string, limit = 3200): string[] {
       return;
     }
     while (start < end) {
-      let at = Math.min(start + limit, end);
-      const block = ranges.find(([a, b]) => a < at && at < b);
-      if (block) at = block[0] > start ? block[0] : block[1];
-      if (at < end && /[\uD800-\uDBFF]/.test(text[at - 1]) && /[\uDC00-\uDFFF]/.test(text[at])) at--;
+      const cut = (target: number) => {
+        let at = target;
+        const block = ranges.find(([a, b]) => a < at && at < b);
+        if (block) at = block[0] > start ? block[0] : block[1];
+        if (at < end && /[\uD800-\uDBFF]/.test(text[at - 1]) && /[\uDC00-\uDFFF]/.test(text[at])) at--;
+        return at;
+      };
+      let at = cut(Math.min(start + limit, end));
+      while (!fits(text.slice(start, at))) {
+        const smaller = cut(start + Math.floor((at - start) / 2));
+        if (smaller <= start || smaller >= at) break; // An atomic tag block cannot be split.
+        at = smaller;
+      }
       units.push(text.slice(start, at)); start = at;
     }
   }
   divide(0, text.length, 0);
   let current = '';
   for (const part of units) {
-    if (current && current.length + part.length > limit) { chunks.push(current); current = ''; }
+    if (current && !fits(current + part)) { chunks.push(current); current = ''; }
     current += part;
   }
   if (current) chunks.push(current);
   return chunks;
 }
 export function protectTags(source: string) {
-  let prefix = 'TRX_TAG_'; while (source.includes(prefix)) prefix += 'X';
+  let prefix = 'TRX_TAG_'; while (source.toUpperCase().includes(prefix)) prefix += 'X';
   const tags: string[] = [];
   const token = (i: number) => `[[${prefix}${i}]]`;
   const text = source.replace(new RegExp(`${markup().source}|(?:\\r?\\n)[ \\t\\r\\n]*`, 'g'), tag => { tags.push(tag); return token(tags.length - 1); });
   return { text, restore(output: string) {
     // Require every placeholder exactly once, in order, and no newly invented markup.
     // On failure retain the original chunk, including every original tag block.
-    let previous = -1;
-    for (let i = 0; i < tags.length; i++) {
-      const at = output.indexOf(token(i));
-      if (at <= previous || output.indexOf(token(i), at + 1) !== -1) return { text: source, fallback: true };
-      previous = at;
-    }
+    const markers = new RegExp(`\\[\\s*\\[\\s*${prefix}\\s*(\\d+)\\s*\\]\\s*\\]`, 'gi');
+    const matches = [...output.matchAll(markers)];
+    if (matches.length !== tags.length || matches.some((match, i) => match[1] !== String(i))) return { text: source, fallback: true };
     if (tags.length && [...output.matchAll(markup())].length) return { text: source, fallback: true };
-    const restored = output.replace(new RegExp(`\\[\\[${prefix}(\\d+)\\]\\]`, 'g'), (whole, n) => tags[Number(n)] ?? whole);
-    if (restored.includes(`[[${prefix}`)) return { text: source, fallback: true };
+    const restored = output.replace(markers, (_, n) => tags[Number(n)]);
+    if (new RegExp(`\\[\\s*\\[\\s*${prefix}`, 'i').test(restored)) return { text: source, fallback: true };
     return { text: restored, fallback: false };
   } };
 }
@@ -163,6 +171,7 @@ export function createTranslationJobs(api: any, window: any, notify: (state: any
     if (!disposed && job === j) notify({ messageId: j.messageId, text, busy, partial: !busy && j.parts.length > 0 });
   }
   async function persist(j: any) {
+    if (!j.successes) { j.parts = []; emit(j, '번역에 성공한 청크 없음 · 기존 번역 유지', false); return; }
     await verify(j);
     const text = resultText(j);
     // use-translate.ts:105-118 persists these three fields. Explicit swipe query supported
@@ -177,7 +186,7 @@ export function createTranslationJobs(api: any, window: any, notify: (state: any
   async function execute(messageId: string, mode: 'continue' | 'split', automatic = false) {
     if (disposed || job?.busy || job?.parts.length) return;
     const chatId = activeChatId(window); if (!chatId) return;
-    const j: any = { chatId, messageId, controller: new window.AbortController(), busy: true, parts: [], prefix: '', fallbacks: 0 };
+    const j: any = { chatId, messageId, controller: new window.AbortController(), busy: true, parts: [], prefix: '', fallbacks: 0, successes: 0 };
     job = j; emit(j, '번역 준비 중', true);
     try {
       j.window = singleWindow(chatId, messageId, hostMessages(window, chatId));
@@ -210,13 +219,14 @@ export function createTranslationJobs(api: any, window: any, notify: (state: any
         if (estimated === null) throw Error('이어질 원문 위치가 불확실합니다 · 나눠서 다시 번역을 사용하세요');
         offset = estimated; j.prefix = raw.trimEnd();
       }
-      const config = translationConfig(chat), chunks = splitTranslation(j.source.slice(offset));
+      const config = translationConfig(chat), protectedLimit = config.provider === 'google' ? 4500 : 50000;
+      const chunks = splitTranslation(j.source.slice(offset), 3200, protectedLimit);
       for (let i = 0; i < chunks.length; i++) {
         check(j); await verify(j); emit(j, `번역 중 · 청크 ${i + 1}/${chunks.length}`, true);
         const chunk = chunks[i], protectedText = protectTags(chunk);
         if (!chunk.trim()) { j.parts.push(chunk); continue; }
         let translated: string | undefined;
-        const withinLimit = protectedText.text.length <= (config.provider === 'google' ? 5000 : 50000);
+        const withinLimit = protectedText.text.length <= protectedLimit;
         for (let attempt = 0; withinLimit && attempt < (mode === 'split' ? 2 : 1); attempt++) {
           if (attempt) { await verify(j); emit(j, `번역 재시도 · 청크 ${i + 1}/${chunks.length}`, true); }
           try {
@@ -224,9 +234,11 @@ export function createTranslationJobs(api: any, window: any, notify: (state: any
             check(j);
             if (typeof response?.translatedText !== 'string' || !response.translatedText.trim()) throw Error('비어 있는 번역 응답');
             const restored = protectedText.restore(response.translatedText);
+            if (restored.fallback && mode === 'continue') break;
             if (restored.fallback || !restored.text.trim()) throw Error('태그·문단 복원 실패');
             const leading = /^\s*/.exec(chunk)![0], trailing = /\s*$/.exec(chunk)![0];
             translated = leading + restored.text.trim() + trailing;
+            j.successes++;
             break;
           } catch (error) {
             check(j); // Cancellation/navigation must never become a successful fallback.
@@ -234,7 +246,7 @@ export function createTranslationJobs(api: any, window: any, notify: (state: any
           }
         }
         if (translated === undefined) {
-          if (mode !== 'split') throw Error('태그 블록이 공급자 한도를 넘습니다');
+          if (!withinLimit && mode !== 'split') throw Error('태그 블록이 공급자 한도를 넘습니다');
           j.fallbacks++; translated = chunk;
           emit(j, `청크 ${i + 1}/${chunks.length} 실패 · 원문 보존`, true);
         }
@@ -243,7 +255,10 @@ export function createTranslationJobs(api: any, window: any, notify: (state: any
       await persist(j);
     } catch (error) {
       j.controller.abort();
-      emit(j, `${error instanceof Error ? error.message : '번역 실패'}${j.parts.length ? ' · 완료된 부분 결과를 저장하거나 버릴 수 있습니다' : ''}`, false);
+      if (!j.successes) j.parts = [];
+      const detail = error instanceof Error ? error.message : '번역 실패';
+      emit(j, `${detail}${j.parts.length ? ' · 완료된 부분 결과를 저장하거나 버릴 수 있습니다'
+        : !j.successes && !detail.endsWith('기존 번역 유지') ? ' · 기존 번역 유지' : ''}`, false);
     } finally { j.busy = false; if (active(j)) notify({ busy: false, partial: j.parts.length > 0, messageId }); }
   }
   return { execute,

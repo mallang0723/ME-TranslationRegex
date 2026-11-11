@@ -9596,10 +9596,12 @@ button[${OWN}][aria-busy=true]::after{animation:translation-regex-pulse .8s infi
     if (stack.length) ranges.push([start2, text2.length]);
     return ranges;
   }
-  function splitTranslation(text2, limit = 3200) {
+  function splitTranslation(text2, limit = 3200, protectedLimit = Infinity) {
     if (!Number.isInteger(limit) || limit < 32) throw Error("Invalid chunk limit");
+    if (protectedLimit !== Infinity && (!Number.isInteger(protectedLimit) || protectedLimit < 32)) throw Error("Invalid protected limit");
     const ranges = tagRanges(text2), chunks = [];
     const safe = (n) => !ranges.some(([a, b]) => a < n && n < b);
+    const fits = (part) => part.length <= limit && (protectedLimit === Infinity || protectTags(part).text.length <= protectedLimit);
     const boundaries = [
       /(?:\r?\n)[ \t]*(?:\r?\n)+/g,
       /\r?\n/g,
@@ -9608,7 +9610,7 @@ button[${OWN}][aria-busy=true]::after{animation:translation-regex-pulse .8s infi
     ];
     const units = [];
     function divide(start2, end, level) {
-      if (end - start2 <= limit) {
+      if (fits(text2.slice(start2, end))) {
         units.push(text2.slice(start2, end));
         return;
       }
@@ -9624,10 +9626,19 @@ button[${OWN}][aria-busy=true]::after{animation:translation-regex-pulse .8s infi
         return;
       }
       while (start2 < end) {
-        let at = Math.min(start2 + limit, end);
-        const block = ranges.find(([a, b]) => a < at && at < b);
-        if (block) at = block[0] > start2 ? block[0] : block[1];
-        if (at < end && /[\uD800-\uDBFF]/.test(text2[at - 1]) && /[\uDC00-\uDFFF]/.test(text2[at])) at--;
+        const cut = (target) => {
+          let at2 = target;
+          const block = ranges.find(([a, b]) => a < at2 && at2 < b);
+          if (block) at2 = block[0] > start2 ? block[0] : block[1];
+          if (at2 < end && /[\uD800-\uDBFF]/.test(text2[at2 - 1]) && /[\uDC00-\uDFFF]/.test(text2[at2])) at2--;
+          return at2;
+        };
+        let at = cut(Math.min(start2 + limit, end));
+        while (!fits(text2.slice(start2, at))) {
+          const smaller = cut(start2 + Math.floor((at - start2) / 2));
+          if (smaller <= start2 || smaller >= at) break;
+          at = smaller;
+        }
         units.push(text2.slice(start2, at));
         start2 = at;
       }
@@ -9635,7 +9646,7 @@ button[${OWN}][aria-busy=true]::after{animation:translation-regex-pulse .8s infi
     divide(0, text2.length, 0);
     let current = "";
     for (const part of units) {
-      if (current && current.length + part.length > limit) {
+      if (current && !fits(current + part)) {
         chunks.push(current);
         current = "";
       }
@@ -9646,7 +9657,7 @@ button[${OWN}][aria-busy=true]::after{animation:translation-regex-pulse .8s infi
   }
   function protectTags(source) {
     let prefix = "TRX_TAG_";
-    while (source.includes(prefix)) prefix += "X";
+    while (source.toUpperCase().includes(prefix)) prefix += "X";
     const tags = [];
     const token = (i) => `[[${prefix}${i}]]`;
     const text2 = source.replace(new RegExp(`${markup().source}|(?:\\r?\\n)[ \\t\\r\\n]*`, "g"), (tag) => {
@@ -9654,15 +9665,12 @@ button[${OWN}][aria-busy=true]::after{animation:translation-regex-pulse .8s infi
       return token(tags.length - 1);
     });
     return { text: text2, restore(output) {
-      let previous = -1;
-      for (let i = 0; i < tags.length; i++) {
-        const at = output.indexOf(token(i));
-        if (at <= previous || output.indexOf(token(i), at + 1) !== -1) return { text: source, fallback: true };
-        previous = at;
-      }
+      const markers = new RegExp(`\\[\\s*\\[\\s*${prefix}\\s*(\\d+)\\s*\\]\\s*\\]`, "gi");
+      const matches = [...output.matchAll(markers)];
+      if (matches.length !== tags.length || matches.some((match, i) => match[1] !== String(i))) return { text: source, fallback: true };
       if (tags.length && [...output.matchAll(markup())].length) return { text: source, fallback: true };
-      const restored = output.replace(new RegExp(`\\[\\[${prefix}(\\d+)\\]\\]`, "g"), (whole, n) => tags[Number(n)] ?? whole);
-      if (restored.includes(`[[${prefix}`)) return { text: source, fallback: true };
+      const restored = output.replace(markers, (_, n) => tags[Number(n)]);
+      if (new RegExp(`\\[\\s*\\[\\s*${prefix}`, "i").test(restored)) return { text: source, fallback: true };
       return { text: restored, fallback: false };
     } };
   }
@@ -9771,6 +9779,11 @@ button[${OWN}][aria-busy=true]::after{animation:translation-regex-pulse .8s infi
       if (!disposed && job === j) notify({ messageId: j.messageId, text: text2, busy, partial: !busy && j.parts.length > 0 });
     }
     async function persist(j) {
+      if (!j.successes) {
+        j.parts = [];
+        emit(j, "\uBC88\uC5ED\uC5D0 \uC131\uACF5\uD55C \uCCAD\uD06C \uC5C6\uC74C \xB7 \uAE30\uC874 \uBC88\uC5ED \uC720\uC9C0", false);
+        return;
+      }
       await verify(j);
       const text2 = resultText(j);
       await request(
@@ -9789,7 +9802,7 @@ button[${OWN}][aria-busy=true]::after{animation:translation-regex-pulse .8s infi
       if (disposed || job?.busy || job?.parts.length) return;
       const chatId = activeChatId(window2);
       if (!chatId) return;
-      const j = { chatId, messageId, controller: new window2.AbortController(), busy: true, parts: [], prefix: "", fallbacks: 0 };
+      const j = { chatId, messageId, controller: new window2.AbortController(), busy: true, parts: [], prefix: "", fallbacks: 0, successes: 0 };
       job = j;
       emit(j, "\uBC88\uC5ED \uC900\uBE44 \uC911", true);
       try {
@@ -9828,7 +9841,8 @@ button[${OWN}][aria-busy=true]::after{animation:translation-regex-pulse .8s infi
           offset = estimated;
           j.prefix = raw.trimEnd();
         }
-        const config = translationConfig(chat), chunks = splitTranslation(j.source.slice(offset));
+        const config = translationConfig(chat), protectedLimit = config.provider === "google" ? 4500 : 5e4;
+        const chunks = splitTranslation(j.source.slice(offset), 3200, protectedLimit);
         for (let i = 0; i < chunks.length; i++) {
           check(j);
           await verify(j);
@@ -9839,7 +9853,7 @@ button[${OWN}][aria-busy=true]::after{animation:translation-regex-pulse .8s infi
             continue;
           }
           let translated;
-          const withinLimit = protectedText.text.length <= (config.provider === "google" ? 5e3 : 5e4);
+          const withinLimit = protectedText.text.length <= protectedLimit;
           for (let attempt2 = 0; withinLimit && attempt2 < (mode === "split" ? 2 : 1); attempt2++) {
             if (attempt2) {
               await verify(j);
@@ -9850,9 +9864,11 @@ button[${OWN}][aria-busy=true]::after{animation:translation-regex-pulse .8s infi
               check(j);
               if (typeof response?.translatedText !== "string" || !response.translatedText.trim()) throw Error("\uBE44\uC5B4 \uC788\uB294 \uBC88\uC5ED \uC751\uB2F5");
               const restored = protectedText.restore(response.translatedText);
+              if (restored.fallback && mode === "continue") break;
               if (restored.fallback || !restored.text.trim()) throw Error("\uD0DC\uADF8\xB7\uBB38\uB2E8 \uBCF5\uC6D0 \uC2E4\uD328");
               const leading = /^\s*/.exec(chunk)[0], trailing = /\s*$/.exec(chunk)[0];
               translated = leading + restored.text.trim() + trailing;
+              j.successes++;
               break;
             } catch (error) {
               check(j);
@@ -9860,7 +9876,7 @@ button[${OWN}][aria-busy=true]::after{animation:translation-regex-pulse .8s infi
             }
           }
           if (translated === void 0) {
-            if (mode !== "split") throw Error("\uD0DC\uADF8 \uBE14\uB85D\uC774 \uACF5\uAE09\uC790 \uD55C\uB3C4\uB97C \uB118\uC2B5\uB2C8\uB2E4");
+            if (!withinLimit && mode !== "split") throw Error("\uD0DC\uADF8 \uBE14\uB85D\uC774 \uACF5\uAE09\uC790 \uD55C\uB3C4\uB97C \uB118\uC2B5\uB2C8\uB2E4");
             j.fallbacks++;
             translated = chunk;
             emit(j, `\uCCAD\uD06C ${i + 1}/${chunks.length} \uC2E4\uD328 \xB7 \uC6D0\uBB38 \uBCF4\uC874`, true);
@@ -9870,7 +9886,9 @@ button[${OWN}][aria-busy=true]::after{animation:translation-regex-pulse .8s infi
         await persist(j);
       } catch (error) {
         j.controller.abort();
-        emit(j, `${error instanceof Error ? error.message : "\uBC88\uC5ED \uC2E4\uD328"}${j.parts.length ? " \xB7 \uC644\uB8CC\uB41C \uBD80\uBD84 \uACB0\uACFC\uB97C \uC800\uC7A5\uD558\uAC70\uB098 \uBC84\uB9B4 \uC218 \uC788\uC2B5\uB2C8\uB2E4" : ""}`, false);
+        if (!j.successes) j.parts = [];
+        const detail = error instanceof Error ? error.message : "\uBC88\uC5ED \uC2E4\uD328";
+        emit(j, `${detail}${j.parts.length ? " \xB7 \uC644\uB8CC\uB41C \uBD80\uBD84 \uACB0\uACFC\uB97C \uC800\uC7A5\uD558\uAC70\uB098 \uBC84\uB9B4 \uC218 \uC788\uC2B5\uB2C8\uB2E4" : !j.successes && !detail.endsWith("\uAE30\uC874 \uBC88\uC5ED \uC720\uC9C0") ? " \xB7 \uAE30\uC874 \uBC88\uC5ED \uC720\uC9C0" : ""}`, false);
       } finally {
         j.busy = false;
         if (active(j)) notify({ busy: false, partial: j.parts.length > 0, messageId });
@@ -9940,6 +9958,12 @@ button[${OWN}][aria-busy=true]::after{animation:translation-regex-pulse .8s infi
     let currentId = activeChatId(window2), store, queryCache;
     let offStore, offQuery, lastStore = "";
     let pollTranslation = false, completionRead = false, wasGenerating = false;
+    let pollStarted = window2.performance.now(), translationPolls = 0;
+    const resetTranslationPolling = () => {
+      pollStarted = window2.performance.now();
+      translationPolls = 0;
+    };
+    const canPollTranslation = () => translationPolls < 15 && window2.performance.now() - pollStarted < 3e4;
     const domStamps = /* @__PURE__ */ new Map();
     const mounted = /* @__PURE__ */ new Map();
     const life = new window2.AbortController();
@@ -10183,6 +10207,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
         store = host?.stores?.chat;
         const consume = (s) => {
           const signature = JSON.stringify([s.activeChatId, s.activeChat, s.isStreaming, s.streamingChatId]);
+          if (s.isStreaming && (!s.streamingChatId || s.streamingChatId === s.activeChatId)) wasGenerating = true;
           if (lastStore && lastStore !== signature) {
             completionRead = true;
             invalidate(true);
@@ -10200,6 +10225,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
         queryCache = next;
         offQuery = next?.subscribe((event) => {
           const key = event.query?.queryKey;
+          if (event.type === "updated" && ["success", "invalidate"].includes(event.action?.type) && key?.[0] === "chats" && key?.[1] === "messages" && key?.[2] === activeChatId(window2)) resetTranslationPolling();
           if (event.type === "updated" && ["success", "invalidate"].includes(event.action?.type) && ["chats", "regex-scripts", "presets", "characters", "personas", "connections"].includes(key?.[0])) invalidate(true);
         });
       }
@@ -10226,6 +10252,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
           pollTranslation = false;
           completionRead = false;
           wasGenerating = false;
+          resetTranslationPolling();
           savedTranslations.clear();
           choices.clear();
           intents.clear();
@@ -10262,6 +10289,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
         if (!jobs.busy) for (const mid of requested) actions.state(mid, "busy", "\uC801\uC6A9 \uC911");
         const state = store?.getState?.();
         if (state?.isStreaming && (!state.streamingChatId || state.streamingChatId === id)) {
+          wasGenerating = true;
           restoreAll();
           for (const mid of actions.ids()) actions.state(mid, "busy", "\uC0DD\uC131 \uC911 \xB7 \uC644\uB8CC \uD6C4 \uD655\uC778");
           status.textContent = "\uC0DD\uC131 \uC911 \xB7 \uC6D0\uB798 \uBC88\uC5ED\uBB38 \uD45C\uC2DC";
@@ -10282,6 +10310,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
         if (wasGenerating) {
           wasGenerating = false;
           completionRead = true;
+          resetTranslationPolling();
           data.invalidate();
         }
         const visible = roots.map((root2) => root2.getAttribute("data-message-id")).filter((mid) => mid && !mid.startsWith("__"));
@@ -10293,9 +10322,10 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
           domStamps.set(mid, stamp);
         }
         data.forget(id, changed);
-        const snapshot = await data.snapshot(id, visible, completionRead);
-        if (!current(version, id)) return;
+        const forceRead = completionRead;
         completionRead = false;
+        const snapshot = await data.snapshot(id, visible, forceRead);
+        if (!current(version, id)) return;
         pollTranslation = false;
         if (jobs.busy) return;
         const { chat, messages, rules, presets } = snapshot;
@@ -10480,7 +10510,10 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px;fle
     api.onCleanup(dispose);
     observe();
     interval = window2.setInterval(() => {
-      if (pollTranslation) completionRead = true;
+      if (pollTranslation && canPollTranslation() && !running && !jobs.busy) {
+        translationPolls++;
+        completionRead = true;
+      }
       void run();
     }, 2e3);
     void run();

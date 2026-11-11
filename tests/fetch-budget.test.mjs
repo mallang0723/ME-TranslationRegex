@@ -87,3 +87,39 @@ test('changed visible text discards stale host cache and fetches just one recent
   assert.equal(h.body.textContent, '새 번역'); assert.deepEqual(limits(h), [3]);
   await h.poll(); assert.deepEqual(limits(h), [3]);
 });
+
+test('missing latest translation stops after 15 polls; DOM changes still recheck without restarting polling', async t => {
+  const h = await setup(t);
+  h.w.performance.now = () => 0; // Count limit must work even before the time limit.
+  h.setState({ isStreaming: true, streamingChatId: 'c' }); await h.settle();
+  h.fixture.messages.at(-1).extra = {};
+  h.setState({ isStreaming: false, streamingChatId: null }); await h.settle();
+  const before = reads(h).length;
+  for (let i = 0; i < 20; i++) await h.poll();
+  assert.equal(reads(h).length - before, 15);
+  h.original.textContent = 'host DOM update'; await h.settle();
+  assert.equal(reads(h).length - before, 16);
+  for (let i = 0; i < 3; i++) await h.poll();
+  assert.equal(reads(h).length - before, 16);
+  h.fixture.messages.at(-1).extra = message().extra;
+  h.original.textContent = '체력 90'; await h.settle();
+  assert.ok(h.wrapper); assert.equal(reads(h).length - before, 17);
+  assert.ok(limits(h).every(n => n === 3));
+});
+
+test('30-second deadline stops pending polls early; host message events start a fresh bounded window', async t => {
+  const h = await setup(t, { loaded: true });
+  let now = 0; h.w.performance.now = () => now;
+  h.setState({ isStreaming: true, streamingChatId: 'c' }); await h.settle();
+  h.fixture.messages.at(-1).extra = {};
+  h.setState({ isStreaming: false, streamingChatId: null }); await h.settle();
+  const before = reads(h).length;
+  now = 29999; await h.poll(); assert.equal(reads(h).length - before, 1);
+  now = 30000; await h.poll();
+  now = 60000; await h.poll(); assert.equal(reads(h).length - before, 1);
+  await h.querySuccess(); await h.poll(); assert.equal(reads(h).length - before, 2);
+  now = 90000; await h.poll(); assert.equal(reads(h).length - before, 2);
+  h.fixture.messages.at(-1).extra = message().extra;
+  await h.querySuccess(); assert.ok(h.wrapper);
+  await h.poll(); assert.equal(reads(h).length - before, 2);
+});

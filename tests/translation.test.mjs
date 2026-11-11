@@ -166,26 +166,28 @@ test('polisher API output/longSource and DOM changes converge, controls remain u
   h.fixture.messages[0].extra.translation = '<status>새 다듬기</status>'; h.original.textContent = '새 다듬기'; await h.settle();
   assert.equal(h.body.textContent, '새 다듬기'); h.stop(); assert.equal(button.isConnected, true); assert.equal(h.original.style.display, '');
 });
-test('tag restoration failure preserves original block and reports fallback, oversized atomic blocks never POST', async t => {
+test('all restoration failures and oversized atomic blocks keep the existing translation without PATCH', async t => {
   const h = await setup(t, { fixture: { messages: [message({ content: '<status key="original">English</status>' })] } });
+  const originalExtra = h.fixture.messages[0].extra;
   writer(h, () => 'provider dropped placeholders'); click(h, 'split-translation'); await h.settle();
-  assert.equal(h.fixture.messages[0].extra.translation, '<status key="original">English</status>');
-  assert.match(h.ui.textContent, /번역 실패 1개 청크는 원문 보존/);
+  assert.equal(h.fixture.messages[0].extra, originalExtra);
+  assert.match(h.ui.textContent, /기존 번역 유지/);
   const count = writes(h).length;
   h.fixture.messages[0].content = '<status>' + 'x'.repeat(6000) + '</status>';
-  click(h, 'split-translation'); await h.settle(); assert.equal(writes(h).length, count + 1);
-  assert.equal(writes(h).at(-1).init.method, 'PATCH');
-  assert.equal(h.fixture.messages[0].extra.translation, h.fixture.messages[0].content);
-  assert.match(h.ui.textContent, /번역 실패 1개 청크는 원문 보존/);
+  click(h, 'split-translation'); await h.settle(); assert.equal(writes(h).length, count);
+  assert.equal(writes(h).filter(r => r.init.method === 'PATCH').length, 0);
+  assert.equal(h.fixture.messages[0].extra, originalExtra);
+  assert.match(h.ui.textContent, /기존 번역 유지/);
 });
-test('empty/malformed responses retry then preserve source; active generation makes no writes', async t => {
+test('empty/malformed responses retry then keep existing translation; active generation makes no writes', async t => {
   for (const response of [{ translatedText: '' }, { result: 'wrong shape' }]) {
     const h = await setup(t); writer(h);
     const normal = h.fixture.write;
     h.fixture.write = (p, i) => p === '/api/translate' ? { ok: true, json: async () => response } : normal(p, i);
-    click(h, 'split-translation'); await h.settle(); assert.equal(writes(h).length, 3);
-    assert.equal(h.fixture.messages[0].extra.translation, 'original');
-    h.fixture.status.active = true; click(h, 'split-translation'); await h.settle(); assert.equal(writes(h).length, 3);
+    click(h, 'split-translation'); await h.settle(); assert.equal(writes(h).length, 2);
+    assert.equal(JSON.parse(h.fixture.messages[0].extra).translation, '<status>체력 90</status>');
+    assert.match(h.ui.textContent, /기존 번역 유지/);
+    h.fixture.status.active = true; click(h, 'split-translation'); await h.settle(); assert.equal(writes(h).length, 2);
   }
 });
 test('successful save updates loaded host pages without triggering a history refetch', async t => {
@@ -263,4 +265,99 @@ test('a source change after a failed attempt aborts the retry and never saves fa
   const h = await setup(t); writer(h, () => { h.fixture.messages[0].content = 'edited'; throw Error('failed'); });
   click(h, 'split-translation'); await h.settle();
   assert.equal(writes(h).length, 1); assert.match(h.ui.textContent, /변경됨/);
+});
+
+test('every provider call throwing leaves existing translation unchanged, including a blank-only tail', async t => {
+  const source = 'English. '.repeat(800) + '\n'.repeat(3300);
+  const chunks = splitTranslation(source, 3200, 4500), extra = { translation: '좋은 기존 번역', translationSource: source };
+  assert.ok(chunks.some(c => !c.trim()));
+  const h = await setup(t, { fixture: { messages: [message({ content: source, extra })] } });
+  writer(h, () => { throw Error('provider unavailable'); });
+  click(h, 'split-translation'); await h.settle();
+  assert.equal(writes(h).filter(r => r.init.method === 'POST').length, chunks.filter(c => c.trim()).length * 2);
+  assert.equal(writes(h).filter(r => r.init.method === 'PATCH').length, 0);
+  assert.deepEqual(h.fixture.messages[0].extra, extra);
+  assert.match(h.ui.querySelectorAll('[role="status"]')[1].textContent, /기존 번역 유지$/);
+  assert.equal(h.ui.querySelector('#save-partial').hidden, true);
+  click(h, 'save-partial'); await h.settle();
+  assert.equal(writes(h).filter(r => r.init.method === 'PATCH').length, 0);
+});
+
+test('400 short lines fit the Google protected budget and every chunk is POSTed and translated', async t => {
+  const source = Array.from({ length: 400 }, (_, i) => `English${i}.`).join('\n');
+  const chunks = splitTranslation(source, 3200, 4500);
+  assert.equal(chunks.join(''), source);
+  assert.ok(chunks.length > splitTranslation(source).length);
+  const h = await setup(t, { fixture: { messages: [message({ content: source })] } });
+  writer(h, text => { assert.ok(text.length <= 4500); return text.replaceAll('English', '한국어'); });
+  click(h, 'split-translation'); await h.settle();
+  const posts = writes(h).filter(r => r.init.method === 'POST');
+  assert.equal(posts.length, chunks.length);
+  assert.deepEqual(posts.map(r => JSON.parse(r.init.body).text), chunks.map(c => protectTags(c).text));
+  assert.equal(h.fixture.messages[0].extra.translation, source.replaceAll('English', '한국어'));
+  assert.equal(writes(h).filter(r => r.init.method === 'PATCH').length, 1);
+  assert.doesNotMatch(h.ui.textContent, /실패 \d+개 청크/);
+});
+
+test('protected splitting preserves atomic markup and Unicode while enforcing both budgets', () => {
+  for (const source of [Array.from({ length: 400 }, (_, i) => `English${i}.`).join('\r\n'),
+    ('😀漢字<trx/>').repeat(500), 'Intro\n' + '<status>' + 'x'.repeat(6000) + '</status>\nTail']) {
+    const chunks = splitTranslation(source, 3200, 4500);
+    assert.equal(chunks.join(''), source);
+    for (const chunk of chunks) {
+      assert.ok(!/^[\uDC00-\uDFFF]|[\uD800-\uDBFF]$/.test(chunk));
+      if (chunk.includes('<status>')) assert.ok(chunk.includes('</status>'));
+      else { assert.ok(chunk.length <= 3200); assert.ok(protectTags(chunk).text.length <= 4500); }
+    }
+  }
+  // A tiny protected budget exercises the final Unicode-safe size fallback too.
+  const source = '😀'.repeat(100) + '<br>'.repeat(50);
+  const chunks = splitTranslation(source, 3200, 64);
+  assert.equal(chunks.join(''), source);
+  assert.ok(chunks.every(c => protectTags(c).text.length <= 64));
+});
+
+test('placeholder whitespace and case normalize without accepting missing, duplicate, reordered or unknown tokens', () => {
+  const source = 'English\r\n \r\n\r\n<status title="value">English</status>\nTail';
+  const p = protectTags(source);
+  const spaced = p.text.replace(/\[\[TRX_TAG_(\d+)\]\]/g, (_, n) => `[ [ trx_tag_ ${n} ] ]`);
+  assert.deepEqual(p.restore(spaced), { text: source, fallback: false });
+  assert.deepEqual(p.restore(p.text.replaceAll('[[TRX_TAG_', '[[ TrX_tAg_').replaceAll(']]', ' ]]')),
+    { text: source, fallback: false });
+  assert.equal((p.text.match(/TRX_TAG_/g) || []).length, 4, 'one placeholder per newline run');
+  for (const bad of [spaced.replace('[ [ trx_tag_ 0 ] ]', ''), spaced + '[[ TRX_TAG_0 ]]',
+    spaced.replace('trx_tag_ 0', 'trx_tag_ 1').replace('trx_tag_ 2', 'trx_tag_ 0'), spaced + '[[ trx_tag_99 ]]', '<b>' + spaced]) {
+    assert.deepEqual(p.restore(bad), { text: source, fallback: true });
+  }
+  const literal = '[[ trx_tag_0 ]] <status>English</status>', collision = protectTags(literal);
+  assert.deepEqual(collision.restore(collision.text), { text: literal, fallback: false });
+});
+
+test('continue keeps a damaged-placeholder chunk as source and translates later chunks', async t => {
+  const prefix = 'First.', remaining = '\n<status>English</status>\n' + 'English. '.repeat(800), source = prefix + remaining;
+  const chunks = splitTranslation(remaining, 3200, 4500);
+  const h = await setup(t, { fixture: { messages: [message({ content: source, extra: { translation: prefix, translationSource: source } })] } });
+  let calls = 0;
+  writer(h, text => ++calls === 1 ? 'lost placeholders' : text.replaceAll('English', '한국어'));
+  click(h, 'continue-translation'); await h.settle();
+  assert.equal(calls, chunks.length);
+  assert.equal(h.fixture.messages[0].extra.translation, prefix + chunks.map((c, i) => i ? c.replaceAll('English', '한국어') : c).join(''));
+  assert.equal(writes(h).filter(r => r.init.method === 'PATCH').length, 1);
+  assert.match(h.ui.textContent, /실패 1개 청크는 원문 보존/);
+});
+
+test('continue with no successfully restored chunks also leaves the existing translation intact', async t => {
+  const source = 'First.\n<status>English</status>', extra = { translation: 'First.', translationSource: source };
+  const h = await setup(t, { fixture: { messages: [message({ content: source, extra })] } });
+  writer(h, () => 'lost placeholders'); click(h, 'continue-translation'); await h.settle();
+  assert.equal(writes(h).filter(r => r.init.method === 'POST').length, 1);
+  assert.equal(writes(h).filter(r => r.init.method === 'PATCH').length, 0);
+  assert.deepEqual(h.fixture.messages[0].extra, extra);
+  assert.match(h.ui.textContent, /기존 번역 유지/);
+  assert.equal(h.ui.querySelector('#save-partial').hidden, true);
+  writer(h, () => { throw Error('provider unavailable'); });
+  click(h, 'continue-translation'); await h.settle();
+  assert.equal(writes(h).filter(r => r.init.method === 'PATCH').length, 0);
+  assert.deepEqual(h.fixture.messages[0].extra, extra);
+  assert.match(h.ui.querySelectorAll('[role="status"]')[1].textContent, /기존 번역 유지$/);
 });
