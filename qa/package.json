@@ -1,10 +1,10 @@
 {
   "file": "translation_regex_me.personal-extension.zip",
-  "bytes": 114871,
-  "sha256": "11e7d4b6effc2579f19f2e45905db6fb66f6004c9937d3d767cac4dcfac377d0",
+  "bytes": 114880,
+  "sha256": "e6e6836d987312d518aeb2f6a216b675c6e9fec5d6d4cb156c3aec119e9ae798",
   "files": {
     "manifest.json": "74642cc298b4d5eea50b8b167d2c68e48750f5def1c163cf605a0c9b2c04bef5",
-    "extension.js": "0c7a3a24470210860b08ab6ba10b303a502dce164f00b631e1017c0d846e28c6",
+    "extension.js": "1b21d406dddce5d3f589f1b9631ad6bb0d21fc9f0bddc800e5e77b51ba2bd889",
     "README.md": "d6e80232da8e2ff400746c73109d7c5c814c8e842f5adddbc6d782f53be408c6",
     "NOTICE": "5428df4e004c7a467790003446be88abc652ecd9a9be24cef9eafbde03477963"
   }

@@ -9255,6 +9255,118 @@
     }, cache };
   }
 
+  // src/gestures.ts
+  function bindGestures(window2, button, options) {
+    const life = new window2.AbortController();
+    let press, timer;
+    const stop = (e) => e.stopPropagation();
+    const consume = (e) => {
+      e.preventDefault();
+      stop(e);
+    };
+    const listen = (target, type, fn) => target.addEventListener(type, fn, { passive: false, signal: life.signal });
+    const clear = () => {
+      window2.clearTimeout(timer);
+      timer = void 0;
+    };
+    function end() {
+      clear();
+      const previous = press;
+      press = void 0;
+      try {
+        if (previous) button.releasePointerCapture(previous.id);
+      } catch {
+      }
+    }
+    function hold() {
+      clear();
+      if (!press || press.moved || press.held || !button.isConnected) return;
+      press.held = true;
+      options.onHold();
+    }
+    function move(e) {
+      if (!press || press.id !== e.pointerId || press.held) return;
+      const dx = e.clientX - press.x, dy = e.clientY - press.y;
+      if (Math.hypot(dx, dy) >= (options.moveLimit ?? 10)) {
+        press.moved = true;
+        clear();
+      }
+      if (press.moved) options.onDrag?.(dx, dy);
+    }
+    listen(button, "pointerdown", (e) => {
+      stop(e);
+      if (press) {
+        end();
+        return;
+      }
+      if (e.button !== 0 || e.isPrimary === false) return;
+      press = { id: e.pointerId, type: e.pointerType, x: e.clientX, y: e.clientY, at: window2.performance.now(), moved: false, held: false };
+      options.onStart?.();
+      try {
+        button.setPointerCapture(e.pointerId);
+      } catch {
+      }
+      timer = window2.setTimeout(hold, options.holdMs);
+    });
+    const handlers = {
+      pointermove(e) {
+        if (press?.id === e.pointerId) {
+          stop(e);
+          move(e);
+        }
+      },
+      pointerup(e) {
+        stop(e);
+        if (press?.id !== e.pointerId) return;
+        move(e);
+        if (window2.performance.now() - press.at >= options.holdMs) hold();
+        const tap = !press.moved && !press.held && button.isConnected;
+        end();
+        if (tap) options.onTap();
+      },
+      pointercancel(e) {
+        if (press?.id === e.pointerId) {
+          stop(e);
+          end();
+        }
+      }
+    };
+    for (const [type, handler] of Object.entries(handlers)) {
+      listen(button, type, handler);
+      listen(window2, type, (e) => {
+        if (press && !button.contains(e.target)) handler(e);
+      });
+    }
+    listen(button, "lostpointercapture", (e) => {
+      if (press?.id === e.pointerId) end();
+    });
+    listen(window2, "blur", end);
+    listen(button, "contextmenu", (e) => {
+      consume(e);
+      if (press?.type === "touch" || e.pointerType === "touch") return;
+      const held = press?.held;
+      end();
+      if (!held) options.onContextMenu?.();
+    });
+    listen(button, "selectstart", consume);
+    listen(button, "mousedown", stop);
+    listen(button, "keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") stop(e);
+    });
+    listen(button, "keyup", (e) => {
+      if (e.key === "Enter" || e.key === " ") stop(e);
+    });
+    listen(button, "click", (e) => {
+      consume(e);
+      if (e.detail === 0 && !e.pointerType && !e.sourceCapabilities?.firesTouchEvents) options.onTap();
+    });
+    listen(button, "dblclick", stop);
+    return { cancel: end, dispose() {
+      end();
+      life.abort();
+    } };
+  }
+
   // src/actions.ts
   var TITLE = "\uBC88\uC5ED\uBB38\uC5D0 \uD45C\uC2DC \uC815\uADDC\uC2DD \uC801\uC6A9 \xB7 \uAE38\uAC8C \uB20C\uB7EC \uC124\uC815 (\uC6B0\uD074\uB9AD \uAC00\uB2A5)";
   var OWN = "data-translation-regex-action";
@@ -9263,7 +9375,7 @@
     const css = document2.createElement("style");
     css.setAttribute(OWN, "");
     css.textContent = `
-button[${OWN}]{position:relative;touch-action:manipulation;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+button[${OWN}]{position:relative;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
 button[${OWN}][aria-pressed=true]::after,button[${OWN}][aria-busy=true]::after,button[${OWN}][data-state=error]::after{content:'';position:absolute;right:3px;top:3px;width:4px;height:4px;border-radius:50%;background:currentColor}
 button[${OWN}][data-state=error]::after{background:#e86868}
 button[${OWN}][aria-busy=true]::after{animation:translation-regex-pulse .8s infinite alternate}
@@ -9275,79 +9387,13 @@ button[${OWN}][aria-busy=true]::after{animation:translation-regex-pulse .8s infi
       entries2.delete(row);
     }
     function gestures(button, id) {
-      const life = new window2.AbortController();
-      let timer, touch, held = false, cancelled = false, suppressClick = false;
-      const clear = () => {
-        window2.clearTimeout(timer);
-        timer = void 0;
-      };
-      const stop = (e) => e.stopPropagation();
-      const consume = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-      };
-      const listen = (type, fn) => button.addEventListener(type, fn, { passive: false, signal: life.signal });
-      listen("pointerdown", (e) => {
-        stop(e);
-        suppressClick = false;
+      const gesture = bindGestures(window2, button, {
+        holdMs: 600,
+        onTap: () => onToggle(id),
+        onHold: () => onSettings(button),
+        onContextMenu: () => onSettings(button)
       });
-      listen("mousedown", stop);
-      listen("pointerup", stop);
-      listen("touchstart", (e) => {
-        consume(e);
-        clear();
-        suppressClick = true;
-        held = false;
-        cancelled = e.touches.length !== 1;
-        touch = e.touches[0];
-        if (cancelled) return;
-        timer = window2.setTimeout(() => {
-          timer = void 0;
-          if (!button.isConnected) return;
-          held = true;
-          onSettings(button);
-        }, 600);
-      });
-      listen("touchmove", (e) => {
-        consume(e);
-        const current = [...e.touches].find((t) => t.identifier === touch?.identifier);
-        if (!current || Math.hypot(current.clientX - touch.clientX, current.clientY - touch.clientY) > 10) {
-          cancelled = true;
-          clear();
-        }
-      });
-      listen("touchend", (e) => {
-        consume(e);
-        clear();
-        if (touch && !held && !cancelled && e.touches.length === 0) onToggle(id);
-        touch = void 0;
-      });
-      for (const type of ["touchcancel", "pointercancel", "pointerleave"]) listen(type, (e) => {
-        stop(e);
-        clear();
-        cancelled = true;
-        touch = void 0;
-      });
-      listen("contextmenu", (e) => {
-        consume(e);
-        if (touch) return;
-        clear();
-        suppressClick = true;
-        onSettings(button);
-      });
-      listen("selectstart", consume);
-      listen("keydown", () => {
-        suppressClick = false;
-      });
-      listen("click", (e) => {
-        consume(e);
-        if (!suppressClick) onToggle(id);
-      });
-      listen("dblclick", stop);
-      return () => {
-        clear();
-        life.abort();
-      };
+      return () => gesture.dispose();
     }
     function sync() {
       for (const [row, entry] of entries2) if (!row.isConnected || !entry.host.isConnected || entry.host.parentElement !== row || row.closest("[data-message-id]")?.getAttribute("data-message-id") !== entry.id) remove(row, entry);
@@ -9417,7 +9463,7 @@ button[${OWN}][aria-busy=true]::after{animation:translation-regex-pulse .8s infi
 #${LAUNCHER_ID} svg{display:block;margin:auto;pointer-events:none}
 #${LAUNCHER_ID}[data-launcher-disabled],#${LAUNCHER_ID}[data-launcher-no-room]{display:none!important}`;
     document2.head.append(css);
-    let disposed = false, wantedY, top = 0, press, holdTimer, clickTimer, suppressClick = false;
+    let disposed = false, wantedY, top = 0, dragTop = 0;
     const observed = /* @__PURE__ */ new Set();
     const resize = window2.ResizeObserver ? new window2.ResizeObserver(() => sync()) : void 0;
     function attr(name, value) {
@@ -9455,100 +9501,28 @@ button[${OWN}][aria-busy=true]::after{animation:translation-regex-pulse .8s infi
       const right = Math.max(0, window2.innerWidth - ((viewport?.offsetLeft || 0) + (viewport?.width || window2.innerWidth)));
       if (button.style.right !== `${right}px`) button.style.right = `${right}px`;
     }
-    function clearHold() {
-      window2.clearTimeout(holdTimer);
-      holdTimer = void 0;
-    }
-    function suppress() {
-      suppressClick = true;
-      window2.clearTimeout(clickTimer);
-      clickTimer = window2.setTimeout(() => {
-        suppressClick = false;
-        clickTimer = void 0;
-      }, 500);
-    }
-    function end() {
-      clearHold();
-      const previous = press;
-      press = void 0;
-      if (previous?.dragged || previous?.held) suppress();
-      try {
-        if (previous) button.releasePointerCapture(previous.id);
-      } catch {
-      }
-    }
-    const listen = (target, type, fn) => target.addEventListener(type, fn, { signal: life.signal, passive: false });
-    listen(button, "pointerdown", (e) => {
-      e.stopPropagation();
-      if (press) {
-        end();
-        suppress();
-        return;
-      }
-      if (e.button !== 0 || e.isPrimary === false) return;
-      window2.clearTimeout(clickTimer);
-      suppressClick = false;
-      press = { id: e.pointerId, y: e.clientY, top, dragged: false, held: false };
-      try {
-        button.setPointerCapture(e.pointerId);
-      } catch {
-      }
-      holdTimer = window2.setTimeout(() => {
-        holdTimer = void 0;
-        if (!press || press.dragged || !button.isConnected) return;
-        press.held = true;
+    const gesture = bindGestures(window2, button, {
+      holdMs: 700,
+      moveLimit: 6,
+      onStart: () => {
+        dragTop = top;
+      },
+      onTap: () => onToggle(button),
+      onHold: () => {
         wantedY = void 0;
         sync();
-      }, 700);
-    });
-    listen(window2, "pointermove", (e) => {
-      if (!press || e.pointerId !== press.id) return;
-      const dy = e.clientY - press.y;
-      if (Math.abs(dy) > 6) {
-        press.dragged = true;
-        clearHold();
-      }
-      if (press.dragged) {
-        e.preventDefault();
-        wantedY = press.top + dy;
+      },
+      onDrag: (_dx, dy) => {
+        wantedY = dragTop + dy;
         sync();
       }
     });
-    listen(window2, "pointerup", (e) => {
-      if (press?.id === e.pointerId) end();
-    });
-    listen(window2, "pointercancel", (e) => {
-      if (press?.id === e.pointerId) {
-        end();
-        suppress();
-      }
-    });
-    listen(button, "lostpointercapture", () => {
-      if (press) {
-        end();
-        suppress();
-      }
-    });
-    listen(window2, "blur", end);
-    listen(button, "click", (e) => {
-      e.stopPropagation();
-      if (suppressClick) {
-        suppressClick = false;
-        window2.clearTimeout(clickTimer);
-        e.preventDefault();
-        return;
-      }
-      onToggle(button);
-    });
-    for (const type of ["contextmenu", "selectstart"]) listen(button, type, (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-    });
+    const listen = (target, type, fn) => target.addEventListener(type, fn, { signal: life.signal });
     listen(window2, "resize", sync);
     listen(window2, "scroll", sync);
     if (window2.visualViewport) for (const type of ["resize", "scroll"]) listen(window2.visualViewport, type, sync);
     const observer = new window2.MutationObserver(() => {
-      if (!button.isConnected) end();
+      if (!button.isConnected) gesture.cancel();
       sync();
     });
     sync();
@@ -9562,8 +9536,7 @@ button[${OWN}][aria-busy=true]::after{animation:translation-regex-pulse .8s infi
       },
       dispose() {
         disposed = true;
-        end();
-        window2.clearTimeout(clickTimer);
+        gesture.dispose();
         life.abort();
         observer.disconnect();
         resize?.disconnect();

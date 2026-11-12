@@ -1,3 +1,4 @@
+import { pointer as dispatchPointer, compatibilityClick } from './pointer-events.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -11,8 +12,7 @@ async function setup(t, options = {}) {
 }
 const launcher = h => h.w.document.getElementById(id);
 function pointer(h, type, y, x = 340, pointerId = 1) {
-  const e = new h.w.MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 });
-  Object.defineProperty(e, 'pointerId', { value: pointerId }); launcher(h).dispatchEvent(e);
+  dispatchPointer(h.w, launcher(h), type, { clientX: x, clientY: y, pointerId });
 }
 function resize(h) { h.w.dispatchEvent(new h.w.Event('resize')); }
 
@@ -33,7 +33,7 @@ test('remote hiding classes/styles survive movement, settings changes, reattachm
   const h = await setup(t), b = launcher(h);
   b.classList.add('remote-hidden'); b.style.setProperty('display', 'none', 'important');
   pointer(h, 'pointerdown', 380); pointer(h, 'pointermove', 250); pointer(h, 'pointerup', 250);
-  b.click(); assert.equal(h.ui.host.hidden, true, 'drag click consumed');
+  compatibilityClick(h.w, b); assert.equal(h.ui.host.hidden, true, 'drag click consumed');
   b.click(); assert.equal(h.ui.host.hidden, false, 'hidden remote target opens');
   const setting = h.ui.querySelector('#showLauncher');
   for (const value of [false, true]) { setting.checked = value; setting.dispatchEvent(new h.w.Event('change')); }
@@ -53,10 +53,8 @@ test('launcher preference persists independently and message cube still opens se
   assert.equal(JSON.parse(h.w.localStorage.getItem('translation_regex_me.settings')).showLauncher, false);
   b.click();
   const cube = h.w.document.querySelector('button[data-translation-regex-action]');
-  const touch = new h.w.Event('touchstart', { bubbles: true, cancelable: true });
-  Object.defineProperty(touch, 'touches', { value: [{ identifier: 1, clientX: 20, clientY: 20 }] });
-  cube.dispatchEvent(touch); await delay(650);
-  cube.dispatchEvent(new h.w.Event('touchend', { bubbles: true, cancelable: true }));
+  dispatchPointer(h.w, cube, 'pointerdown'); await delay(650);
+  dispatchPointer(h.w, cube, 'pointerup');
   assert.equal(h.ui.host.hidden, false); assert.equal(h.ui.querySelector('#split-translation').parentElement.hidden, false);
   h.w.eval(readFileSync('dist/extension.js', 'utf8')); await h.settle();
   assert.equal(h.w.document.querySelectorAll(`#${id}`).length, 1);
@@ -64,16 +62,16 @@ test('launcher preference persists independently and message cube still opens se
   launcher(h).click(); assert.equal(h.ui.host.hidden, false);
 });
 
-test('vertical-only drag clamps above composer and viewport, then consumes just the next click', async t => {
+test('vertical-only drag clamps above composer and viewport, then ignores physical clicks while preserving dock click()', async t => {
   const h = await setup(t), b = launcher(h), composer = h.w.document.querySelector('.composer');
   Object.defineProperty(h.w, 'innerHeight', { value: 780, configurable: true });
   composer.getBoundingClientRect = () => ({ top: 650, bottom: 780, width: 360, height: 130 }); resize(h);
   assert.equal(b.style.top, '368px');
   pointer(h, 'pointerdown', 390); pointer(h, 'pointermove', 900, 40); pointer(h, 'pointerup', 900, 40);
   assert.equal(b.style.top, '598px'); assert.equal(b.style.right, '0px');
-  b.click(); assert.equal(h.ui.host.hidden, true); b.click(); assert.equal(h.ui.host.hidden, false); b.click();
+  compatibilityClick(h.w, b); assert.equal(h.ui.host.hidden, true); b.click(); assert.equal(h.ui.host.hidden, false); b.click();
   pointer(h, 'pointerdown', 600); pointer(h, 'pointermove', -500); pointer(h, 'pointerup', -500);
-  assert.equal(b.style.top, '8px'); b.click();
+  assert.equal(b.style.top, '8px'); compatibilityClick(h.w, b);
   // Horizontal movement never changes the anchored edge or the vertical position.
   pointer(h, 'pointerdown', 20); pointer(h, 'pointermove', 20, 20); pointer(h, 'pointerup', 20, 20);
   assert.equal(b.style.top, '8px'); assert.equal(b.style.right, '0px');
@@ -81,7 +79,7 @@ test('vertical-only drag clamps above composer and viewport, then consumes just 
 
 test('700ms hold resets position without opening settings; cancellation and cleanup clear timers', async t => {
   const h = await setup(t), b = launcher(h);
-  pointer(h, 'pointerdown', 380); pointer(h, 'pointermove', 140); pointer(h, 'pointerup', 140); b.click();
+  pointer(h, 'pointerdown', 380); pointer(h, 'pointermove', 140); pointer(h, 'pointerup', 140); compatibilityClick(h.w, b);
   const native = h.w.setTimeout; let fire;
   h.w.setTimeout = (fn, ms) => {
     if (ms !== 700) return native(fn, ms);
@@ -89,8 +87,8 @@ test('700ms hold resets position without opening settings; cancellation and clea
   };
   pointer(h, 'pointerdown', 140); assert.equal(typeof fire, 'function'); fire();
   assert.equal(b.style.top, `${(h.w.innerHeight - 44) / 2}px`);
-  pointer(h, 'pointerup', 140); b.click(); assert.equal(h.ui.host.hidden, true);
-  pointer(h, 'pointerdown', 380); pointer(h, 'pointercancel', 380); b.click(); assert.equal(h.ui.host.hidden, true);
+  pointer(h, 'pointerup', 140); compatibilityClick(h.w, b); assert.equal(h.ui.host.hidden, true);
+  pointer(h, 'pointerdown', 380); pointer(h, 'pointercancel', 380); compatibilityClick(h.w, b); assert.equal(h.ui.host.hidden, true);
   pointer(h, 'pointerdown', 380); h.stop();
   assert.equal(h.timers.size, 0); assert.equal(h.intervals.size, 0); assert.equal(launcher(h), null);
 });
@@ -99,7 +97,7 @@ test('composer growth, fallback editors and visual viewport changes keep launche
   const h = await setup(t), b = launcher(h), composer = h.w.document.querySelector('.composer');
   let top = 700;
   composer.getBoundingClientRect = () => ({ top, bottom: 780, width: 360, height: 780 - top });
-  pointer(h, 'pointerdown', 380); pointer(h, 'pointermove', 1000); pointer(h, 'pointerup', 1000); b.click();
+  pointer(h, 'pointerdown', 380); pointer(h, 'pointermove', 1000); pointer(h, 'pointerup', 1000); compatibilityClick(h.w, b);
   top = 400; composer.style.height = '380px'; await delay(0); assert.equal(b.style.top, '348px');
   composer.classList.remove('composer'); resize(h); assert.equal(b.style.top, '348px', 'textarea form fallback');
   const viewport = new h.w.EventTarget(); Object.assign(viewport, { offsetTop: 10, height: 320, offsetLeft: 0, width: 360 });

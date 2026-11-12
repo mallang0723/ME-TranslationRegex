@@ -38,7 +38,27 @@ main{max-width:100%;display:flex;flex-direction:column;gap:8px}.host-control{col
     } };
   }, { rule: rule({ replaceString: `<style>body{background:red}button{color:red}:host{position:fixed;inset:0} .dem{width:900px;padding:12px;background:#eef4ff;border:1px solid #9ab;border-radius:8px} .dem b{color:#456}</style><section class="dem"><b>DEM 상태 패널</b><p>$1</p><img src="https://outside.invalid/track" alt="원격 이미지 생략"></section>` }), message: message() });
   await page.addScriptTag({ content: readFileSync('dist/extension.js', 'utf8') });
-  const action = page.locator('button[data-translation-regex-action]');
+  const actionSelector = 'button[data-translation-regex-action]';
+  const launcherSelector = '#translation-regex-launcher';
+  const action = page.locator(actionSelector);
+  const client = await page.context().newCDPSession(page);
+  const touchPoint = async locator => {
+    const box = await locator.boundingBox();
+    assert.ok(box, 'touch target is visible');
+    return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  };
+  const touchStart = async point => client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point] });
+  const touchEnd = async () => client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  // Observe trusted browser events, without manufacturing clicks or cancelling
+  // Touch Events. This catches a regression hidden by locator.click().
+  await page.evaluate(() => {
+    window.gestureEvents = [];
+    for (const type of ['pointerdown', 'pointerup', 'pointercancel', 'pointerout', 'pointerleave', 'touchstart', 'touchend', 'click'])
+      document.addEventListener(type, e => {
+        const target = e.target.closest?.('button[data-translation-regex-action],#translation-regex-launcher');
+        if (target) gestureEvents.push({ target: target.id || 'cube', type, pointerType: e.pointerType, trusted: e.isTrusted });
+      }, { capture: true, passive: true });
+  });
   await action.waitFor();
   checks.push(['fresh install manual default', await page.evaluate(() => !document.querySelector('[data-translation_regex_me]') && fake.requests.length === 0)]);
   checks.push(['44px launcher at right edge above composer and send unobstructed', await page.evaluate(() => {
@@ -47,16 +67,26 @@ main{max-width:100%;display:flex;flex-direction:column;gap:8px}.host-control{col
     return ui.hidden && a.width === 44 && a.height === 44 && a.right === innerWidth && a.bottom < document.querySelector('.composer').getBoundingClientRect().top && document.elementFromPoint(r.x+r.width/2, r.y+r.height/2) === send;
   })]);
   const launcher = page.locator('#translation-regex-launcher');
-  await launcher.tap(); await page.getByRole('dialog').waitFor();
+  await page.tap(launcherSelector); await page.getByRole('dialog').waitFor();
+  checks.push(['real touch launcher tap opens settings', await launcher.getAttribute('aria-expanded') === 'true']);
   await page.getByRole('button', { name: '닫기', exact: true }).click();
-  const launcherBox = await launcher.boundingBox();
-  await page.mouse.move(launcherBox.x + 22, launcherBox.y + 22); await page.mouse.down();
-  await page.mouse.move(100, 770, { steps: 10 }); await page.mouse.up();
+  const launcherPoint = await touchPoint(launcher);
+  await touchStart(launcherPoint);
+  await client.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: 100, y: 770 }] });
+  await touchEnd();
   checks.push(['vertical drag clamps above composer and does not open panel', await page.evaluate(() => {
     const r = document.getElementById('translation-regex-launcher').getBoundingClientRect();
     return r.right === innerWidth && r.bottom <= document.querySelector('.composer').getBoundingClientRect().top - 8 && document.getElementById('translation_regex_me').hidden;
   })]);
-  await page.waitForTimeout(550);
+  await touchStart(await touchPoint(launcher));
+  try {
+    await page.waitForTimeout(750);
+    checks.push(['700ms touch hold resets launcher before release', await page.evaluate(() => {
+      const b = document.getElementById('translation-regex-launcher');
+      return Math.abs(b.getBoundingClientRect().top - (innerHeight - 44) / 2) < 1 && document.getElementById('translation_regex_me').hidden;
+    })]);
+  } finally { await touchEnd(); }
+  checks.push(['launcher hold release does not open settings', await page.getByRole('dialog').isHidden()]);
   await page.evaluate(() => {
     const b = document.getElementById('translation-regex-launcher');
     b.classList.add('remote-hidden'); b.style.setProperty('display', 'none', 'important'); b.click();
@@ -69,7 +99,7 @@ main{max-width:100%;display:flex;flex-direction:column;gap:8px}.host-control{col
     const b = document.getElementById('translation-regex-launcher'); b.click();
     b.classList.remove('remote-hidden'); b.style.removeProperty('display');
   });
-  await action.tap();
+  await page.tap(actionSelector);
   await page.locator('[data-translation_regex_me]').waitFor();
   checks.push(['short touch toggles only', await page.evaluate(() => document.getElementById('translation_regex_me').hidden)]);
   checks.push(['cube is the last child and matches host spacing/size at 360px', await page.evaluate(() => {
@@ -87,11 +117,12 @@ main{max-width:100%;display:flex;flex-direction:column;gap:8px}.host-control{col
   await page.waitForFunction(() => document.querySelectorAll('button[data-translation-regex-action]').length === 1 && document.querySelector('button[data-translation-regex-action]').getAttribute('aria-pressed') === 'true');
   checks.push(['React action row replacement repaired', true]);
   checks.push(['HTTP insecure context', await page.evaluate(() => !isSecureContext)]);
-  const client = await page.context().newCDPSession(page);
-  const box = await action.boundingBox();
-  await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: box.x+box.width/2, y: box.y+box.height/2 }] });
-  await page.waitForTimeout(650);
-  await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await touchStart(await touchPoint(action));
+  try {
+    await page.waitForTimeout(650);
+    // Check before releasing: a timer that never starts must fail this check.
+    checks.push(['650ms CDP touch hold opens settings before release', await page.getByRole('dialog').isVisible()]);
+  } finally { await touchEnd(); }
   await page.getByRole('dialog').waitFor();
   checks.push(['600ms native touch opens settings without toggling', await action.getAttribute('aria-pressed') === 'true']);
   checks.push(['360px settings within viewport', await page.evaluate(() => {
@@ -114,14 +145,25 @@ main{max-width:100%;display:flex;flex-direction:column;gap:8px}.host-control{col
   await action.click({ button: 'right' });
   await page.mouse.click(4, 4);
   checks.push(['outside tap closes', await page.getByRole('dialog').isHidden()]);
-  await action.tap();
+  await page.tap(actionSelector);
   await page.waitForFunction(() => !document.querySelector('[data-translation_regex_me]'));
   checks.push(['disable original visible', await page.locator('.mari-message-content').isVisible()]);
+  // Native keyboard activation must still work after touch and right-click.
+  await action.focus(); await page.keyboard.press('Enter');
+  await page.locator('[data-translation_regex_me]').waitFor();
+  await page.keyboard.press('Space');
+  await page.waitForFunction(() => !document.querySelector('[data-translation_regex_me]'));
+  checks.push(['Enter and Space each toggle once after touch gestures', await page.getByRole('dialog').isHidden()]);
+  checks.push(['cube and launcher receive trusted touch pointer events', await page.evaluate(() =>
+    ['cube', 'translation-regex-launcher'].every(target => gestureEvents.some(e => e.target === target && e.type === 'pointerdown' && e.pointerType === 'touch' && e.trusted)))]);
   await page.evaluate(() => fake.cleanups.forEach(fn => fn()));
   checks.push(['cleanup UI removed', await page.locator('#translation_regex_me').count() === 0]);
   checks.push(['no external/resource requests', blocked.length === 0]);
   checks.push(['no browser errors', errors.length === 0]);
   for (const [name, ok] of checks) assert.equal(ok, true, name);
-  writeFileSync('qa/browser-results.json', JSON.stringify({ version: '0.3.3', status: 'passed', viewport: '360x780', checks, blocked, errors }, null, 2) + '\n');
+  writeFileSync('qa/browser-results.json', JSON.stringify({ version: '0.3.3', status: 'passed', viewport: '360x780', checks, blocked, errors, gestureEvents: await page.evaluate(() => gestureEvents) }, null, 2) + '\n');
   console.log(`${checks.length} browser checks passed`);
+} catch (error) {
+  writeFileSync('qa/browser-results.json', JSON.stringify({ version: '0.3.3', status: 'failed', viewport: '360x780', checks, blocked, errors, reason: safeError(error) }, null, 2) + '\n');
+  throw error;
 } finally { await browser.close(); }

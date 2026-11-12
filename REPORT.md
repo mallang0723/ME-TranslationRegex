@@ -343,3 +343,27 @@ QA 인스턴스는 접근/수정하지 않았습니다. 변경은 이 저장소�
 - 검수 **조건 4(실제 Marinara + 실제 Google로 긴 메시지 1회 번역)**는 이 세션에서 실행하지 않았으며 출시 전 확인이 남아 있습니다. 위 POST 수와 번역 결과는 모두 가짜 공급자/harness 검증입니다. 실제 공급자의 자리표시자 보존율·번역 품질·실기기 터치 동작은 검증했다고 주장하지 않습니다.
 - **fix1은 미커밋 상태입니다.** 이 세션의 파일시스템 정책이 저장소 `.git`을 읽기 전용으로 지정하고 승인 요청을 허용하지 않아, brief의 예외에 따라 커밋하지 않았습니다. 요청된 작성자/커미터는 `mallang0723 <308239590+mallang0723@users.noreply.github.com>`, trailer 없음입니다. 기존 `eb2fddc` 커밋과 fix1의 미커밋 변경을 구분합니다. **push는 하지 않았습니다.**
 - 금지된 Lumiverse 경로/환경변수·context 텍스트·포트 7881·N100/syharch:10000에 접근하지 않았고 `pkill -f`를 실행하지 않았습니다. 무제한 `/messages` GET을 추가하지 않았습니다.
+
+## 0.3.3 fix2
+
+작성일: 2026-11-12. `BRIEF-0.3.3-fix2-touch.md`를 읽고 큐브/플로팅 런처의 터치 제스처를 수정했습니다. 시작 브랜치/HEAD는 `fix/0.3.3` / `3a938c8`이며, 이 HEAD에는 fix1이 커밋되어 있습니다. 위 fix1의 미커밋 문구는 당시 세션 기록입니다. 기존 미추적 QA 파일 11개는 유지했으며 package/lock/manifest 버전은 **0.3.3** 그대로입니다.
+
+### 원인과 변경
+
+- **큐브 탭 무응답:** 기존 `pointerleave`가 `touchend`보다 먼저 도착하면 취소 상태로 바뀌어 토글하지 못했습니다. `src/gestures.ts`에 공통 Pointer Events 처리기를 만들고 `src/actions.ts`와 `src/launcher.ts`에서 사용합니다. `touchstart/move/end`에 의존하는 제스처 처리는 제거했습니다. `pointerdown`에서 타이머를 시작하고 포인터를 캡처하며, `pointerup`에서 직접 탭을 실행합니다. `pointerout/leave`는 취소 조건으로 사용하지 않습니다.
+- **큐브:** 600ms 미만, 시작점에서 이동 거리 10px 미만이면 한 번 토글합니다. 600ms 유지하면 설정만 열고 해제 시 토글하지 않습니다. 큰 이동, `pointercancel`, 캡처 상실, 창 blur, 추가 포인터, 제거/정리 시 타이머와 제스처를 취소합니다. 타이머 콜백이 메인 스레드 지연으로 늦어져도 해제 시 단조 시간으로 600ms 경계를 다시 검사합니다. 우클릭/contextmenu는 설정을 열며, 누르는 중의 네이티브 터치 메뉴는 타이머와 중복 실행하지 않습니다.
+- **런처:** 호환 click 없이도 짧은 탭으로 설정을 토글합니다. 이동 거리 6px부터 드래그로 판정하고 세로 위치만 바꾸며, 가로 이동도 탭/위치 초기화를 취소합니다. 기존 화면/입력창 경계 제한과 700ms 위치 초기화는 유지합니다. 길게 누른 뒤 해제하거나 드래그/취소한 뒤 생긴 물리 click은 설정을 열지 않습니다.
+- **중복 실행과 접근성:** 물리 click은 포인터 제스처가 이미 처리하므로 실행하지 않습니다. Enter/Space의 네이티브 버튼 활성화와 접근성/도크의 `click()`은 detail 0, 포인터 정보 없는 click 경로로 계속 동작합니다. 기존 런처의 500ms 억제 타이머는 제거하여 도크 호출이 다음 click을 기다리지 않습니다. `touch-action:none`, `user-select:none`, `-webkit-user-select:none`, `-webkit-touch-callout:none`은 해당 버튼에만 적용하며 페이지 전체 스크롤 정책은 변경하지 않습니다.
+
+### 테스트와 브라우저 QA
+
+- **npm test: 177개 통과, 실패 0, 취소 0, 생략 0.** 기존 150개에 공통 제스처 회귀 27개를 추가했습니다. 전체 로그: `qa/test-results-fix2.txt`.
+- `tests/gestures.test.mjs`에서 Blink의 `pointerdown → touchstart → pointerup → pointerout → pointerleave → touchend` 순서와 iOS Safari 대응용 touchend 선행/경계 이벤트 선행 순서를 합성하여 큐브와 런처 모두 호환 click 유무와 관계없이 한 번씩만 토글하는지 검증합니다. 600/700ms 직전·경계·지연된 타이머, 마우스 탭/홀드, Enter/Space, 도크 호출, 이동 후 원위치 복귀, 해제 좌표만 크게 달라진 경우, pointercancel/캡처 상실/blur/추가 포인터/정리, 우클릭과 네이티브 메뉴, 캡처 실패 시 바깥 해제도 검증합니다. 합성 이벤트 검증은 실제 iOS 기기 검증을 뜻하지 않습니다.
+- `tests/runtime.test.mjs`와 `tests/launcher.test.mjs`의 기존 Touch Events 단독 입력을 Pointer Events로 바꿨습니다. 실제 큐브의 설정 열기·토글·정리와 런처의 위치 제한·700ms 초기화·숨겨진 도크 호출 회귀를 계속 검증합니다. 호환 click은 detail 1로 합성하여 키보드/도크의 detail 0 호출과 구분합니다.
+- `scripts/browser-qa.mjs`는 `hasTouch:true`와 `page.tap()`으로 큐브/런처를 누릅니다. CDP 터치를 650ms 유지한 **해제 전**에 큐브 설정이 열렸는지 확인하여 타이머 미시작을 검출합니다. 런처도 실제 CDP 터치 드래그와 750ms 유지로 700ms 초기화를 검사합니다. 키보드 Enter/Space, trusted touch pointer 이벤트 기록, 실패 시 부분 결과 저장을 추가했습니다. **브라우저 QA 실행은 brief에서 지정한 리뷰어에게 남겨 두었으며 이 세션에서는 실행하지 않았습니다.** 실제 휴대폰/iOS Safari에서의 홀드·스크롤·호스트 공존 동작은 미검증입니다.
+
+### 산출물과 커밋 상태
+
+- 기존 `scripts/build.mjs` / `scripts/package.mjs`로 root/dist/ZIP을 재생성했고 `npm run package`가 성공했습니다. ZIP **114,880바이트**, SHA-256 **`e6e6836d987312d518aeb2f6a216b675c6e9fec5d6d4cb156c3aec119e9ae798`**입니다. 네 루트 파일의 root/dist/ZIP 바이트 일치, ZIP CRC, 버전 일치, 결정적 ZIP 생성, vendor 해시, 루트/dist 번들과 브라우저 QA 스크립트의 `node --check`, `git diff --check`를 확인했습니다. 패키지 정보: `qa/package.json`; 최종 확인: `qa/final-verification-fix2.json`.
+- **fix2는 미커밋 상태입니다.** 이 세션의 파일시스템 정책이 `.git`을 읽기 전용으로 지정하고 승인 요청을 허용하지 않으므로 brief의 예외를 적용했습니다. 요청된 작성자/커미터는 `mallang0723 <308239590+mallang0723@users.noreply.github.com>`, trailer 없음입니다. **push는 하지 않았습니다.**
+- 금지된 Lumiverse 경로/환경변수·context 텍스트·포트 7881·N100/syharch:10000에 접근하지 않았고 `pkill -f`를 실행하지 않았습니다. 데이터 조회 코드는 변경하지 않았으며 무제한 `/messages` GET을 추가하지 않았습니다.

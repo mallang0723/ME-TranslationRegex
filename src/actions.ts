@@ -1,3 +1,5 @@
+import { bindGestures } from './gestures';
+
 const TITLE = '번역문에 표시 정규식 적용 · 길게 눌러 설정 (우클릭 가능)';
 const OWN = 'data-translation-regex-action';
 export function createActions(window: any, onToggle: (id: string) => void, onSettings: (button: any) => void) {
@@ -6,7 +8,7 @@ export function createActions(window: any, onToggle: (id: string) => void, onSet
   // MessageActionButton.tsx:4,42-44: direct button, 1em icon, h-9/w-9 and
   // max-md:h-8/w-7. Inherit row gap/mobile flex distribution (globals.css:6829-6844).
   css.textContent = `
-button[${OWN}]{position:relative;touch-action:manipulation;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+button[${OWN}]{position:relative;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
 button[${OWN}][aria-pressed=true]::after,button[${OWN}][aria-busy=true]::after,button[${OWN}][data-state=error]::after{content:'';position:absolute;right:3px;top:3px;width:4px;height:4px;border-radius:50%;background:currentColor}
 button[${OWN}][data-state=error]::after{background:#e86868}
 button[${OWN}][aria-busy=true]::after{animation:translation-regex-pulse .8s infinite alternate}
@@ -14,56 +16,13 @@ button[${OWN}][aria-busy=true]::after{animation:translation-regex-pulse .8s infi
   document.head.append(css);
   function remove(row: any, entry: any) { entry.cleanup(); entry.host.remove(); entries.delete(row); }
   function gestures(button: any, id: string) {
-    const life = new window.AbortController();
-    let timer: any, touch: any, held = false, cancelled = false, suppressClick = false;
-    const clear = () => { window.clearTimeout(timer); timer = undefined; };
-    const stop = (e: any) => e.stopPropagation();
-    const consume = (e: any) => { e.preventDefault(); e.stopPropagation(); };
-    const listen = (type: string, fn: any) => button.addEventListener(type, fn, { passive: false, signal: life.signal });
-    // Host reference: ChatMessage.tsx:2313,3911-3912 delegates touch/click to ancestors;
-    // MariSuggestionChips.tsx:354-379 suppresses native menus and clicks after a hold.
-    // Cancel touch defaults at the button to prevent selection/callout before our 600ms timer;
-    // handle the short tap here because that also cancels the browser's compatibility click.
-    listen('pointerdown', (e: any) => { stop(e); suppressClick = false; });
-    listen('mousedown', stop);
-    listen('pointerup', stop);
-    listen('touchstart', (e: any) => {
-      consume(e); clear(); suppressClick = true; held = false; cancelled = e.touches.length !== 1;
-      touch = e.touches[0];
-      if (cancelled) return;
-      timer = window.setTimeout(() => {
-        timer = undefined;
-        if (!button.isConnected) return;
-        held = true; onSettings(button);
-      }, 600);
+    const gesture = bindGestures(window, button, {
+      holdMs: 600, onTap: () => onToggle(id), onHold: () => onSettings(button),
+      onContextMenu: () => onSettings(button),
     });
-    listen('touchmove', (e: any) => {
-      consume(e);
-      const current = [...e.touches].find((t: any) => t.identifier === touch?.identifier);
-      if (!current || Math.hypot(current.clientX - touch.clientX, current.clientY - touch.clientY) > 10) {
-        cancelled = true; clear();
-      }
-    });
-    listen('touchend', (e: any) => {
-      consume(e); clear();
-      if (touch && !held && !cancelled && e.touches.length === 0) onToggle(id);
-      touch = undefined;
-    });
-    for (const type of ['touchcancel', 'pointercancel', 'pointerleave']) listen(type, (e: any) => {
-      stop(e); clear(); cancelled = true; touch = undefined;
-    });
-    listen('contextmenu', (e: any) => {
-      consume(e);
-      // A native touch menu can arrive before 600ms. Keep the touch timer authoritative.
-      if (touch) return;
-      clear(); suppressClick = true; onSettings(button);
-    });
-    listen('selectstart', consume);
-    listen('keydown', () => { suppressClick = false; });
-    listen('click', (e: any) => { consume(e); if (!suppressClick) onToggle(id); });
-    listen('dblclick', stop);
-    return () => { clear(); life.abort(); };
+    return () => gesture.dispose();
   }
+
   function sync() {
     for (const [row, entry] of entries) if (!row.isConnected || !entry.host.isConnected || entry.host.parentElement !== row ||
       row.closest('[data-message-id]')?.getAttribute('data-message-id') !== entry.id) remove(row, entry);

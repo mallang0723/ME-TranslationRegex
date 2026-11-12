@@ -1,3 +1,4 @@
+import { pointer, compatibilityClick } from './pointer-events.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { harness, rule, message, delay } from './harness.mjs';
@@ -173,25 +174,20 @@ test('0.2 regression: translation-only completion exits waiting on the next 2s p
 const actionHTML = (content = '<div class="translation-text"><p>체력 90</p></div>') => `<main class="mari-message-assistant" data-message-id="m">${content}<div class="mari-message-actions opacity-100"><button title="복사"><svg></svg></button><button title="번역">번역</button></div></main>`;
 const action = h => h.w.document.querySelector('button[data-translation-regex-action]');
 
-function touchEvent(h, button, type, points = [{ identifier: 1, clientX: 20, clientY: 20 }]) {
-  const event = new h.w.Event(type, { bubbles: true, cancelable: true });
-  Object.defineProperty(event, 'touches', { value: points });
-  button.dispatchEvent(event); return event;
-}
+function pointerEvent(h, button, type, patch) { return pointer(h.w, button, type, patch); }
 test('message cube short touch only toggles and consumes the compatibility click', async t => {
   const h = await withHost(t, { settings: null, html: actionHTML() }), button = action(h);
   assert.equal([...h.ui.querySelectorAll('button')].some(b => b.textContent === '번역 정규식'), false);
   assert.equal(h.ui.host.hidden, true);
   const bubbled = [];
-  for (const type of ['touchstart', 'touchend', 'click', 'contextmenu', 'selectstart', 'pointerdown'])
+  for (const type of ['pointerdown', 'pointerup', 'click', 'contextmenu', 'selectstart'])
     button.closest('main').addEventListener(type, () => bubbled.push(type));
-  button.dispatchEvent(new h.w.Event('pointerdown', { bubbles: true }));
-  assert.equal(touchEvent(h, button, 'touchstart').defaultPrevented, true);
+  pointerEvent(h, button, 'pointerdown');
   const select = new h.w.Event('selectstart', { bubbles: true, cancelable: true }); button.dispatchEvent(select);
   assert.equal(select.defaultPrevented, true);
-  touchEvent(h, button, 'touchend', []); button.click(); await h.settle();
+  pointerEvent(h, button, 'pointerup'); compatibilityClick(h.w, button); await h.settle();
   assert.ok(h.wrapper); assert.equal(h.ui.host.hidden, true); assert.deepEqual(bubbled, []);
-  touchEvent(h, button, 'touchstart'); touchEvent(h, button, 'touchend', []); button.click(); await h.settle();
+  pointerEvent(h, button, 'pointerdown'); pointerEvent(h, button, 'pointerup'); compatibilityClick(h.w, button); await h.settle();
   assert.equal(h.wrapper, null); assert.equal(h.ui.host.hidden, true);
 });
 test('0.2.1 touch hold opens at 600ms, consumes early context menu and release without toggling', async t => {
@@ -203,12 +199,12 @@ test('0.2.1 touch hold opens at 600ms, consumes early context menu and release w
     return nativeTimeout(fn, ms);
   };
   let menus = 0; button.closest('main').addEventListener('contextmenu', () => menus++);
-  touchEvent(h, button, 'touchstart');
+  pointerEvent(h, button, 'pointerdown');
   const event = new h.w.MouseEvent('contextmenu', { bubbles: true, cancelable: true }); button.dispatchEvent(event);
   assert.equal(event.defaultPrevented, true); assert.equal(menus, 0); assert.equal(h.ui.host.hidden, true);
   assert.equal(typeof fire, 'function'); fire();
   assert.equal(h.ui.host.hidden, false); assert.equal(h.ui.querySelector('section').hidden, false);
-  touchEvent(h, button, 'touchend', []); button.click(); await h.settle();
+  pointerEvent(h, button, 'pointerup'); compatibilityClick(h.w, button); await h.settle();
   assert.equal(h.wrapper, null); assert.equal(h.requests.length, 0);
   h.ui.querySelector('header button').click();
   assert.equal(h.ui.host.hidden, true); assert.equal(h.w.document.activeElement, button);
@@ -236,17 +232,17 @@ test('0.2.1 right click opens modal; inside click, focus trap, Escape, backdrop 
   assert.equal(h.ui.querySelector('#conversation').checked, true);
 });
 test('0.2.1 movement, cancellation, multiple fingers, row removal and cleanup cancel pending holds', async t => {
-  for (const cancel of ['move', 'touchcancel', 'pointercancel', 'multi', 'remove', 'cleanup']) {
+  for (const cancel of ['move', 'pointercancel', 'lostpointercapture', 'multi', 'remove', 'cleanup']) {
     const h = await withHost(t, { settings: null, html: actionHTML() }), button = action(h);
-    touchEvent(h, button, 'touchstart');
-    if (cancel === 'move') touchEvent(h, button, 'touchmove', [{ identifier: 1, clientX: 50, clientY: 20 }]);
-    else if (cancel === 'multi') touchEvent(h, button, 'touchstart', [{ identifier: 1 }, { identifier: 2 }]);
+    pointerEvent(h, button, 'pointerdown');
+    if (cancel === 'move') pointerEvent(h, button, 'pointermove', { clientX: 50 });
+    else if (cancel === 'multi') pointerEvent(h, button, 'pointerdown', { pointerId: 2, isPrimary: false });
     else if (cancel === 'remove') { h.w.document.querySelector('.mari-message-actions').remove(); await h.refresh(); }
     else if (cancel === 'cleanup') h.stop();
-    else touchEvent(h, button, cancel, []);
+    else pointerEvent(h, button, cancel);
     await delay(630);
     assert.ok(!h.ui || h.ui.host.hidden, cancel);
-    touchEvent(h, button, 'touchend', []); button.click(); await h.settle();
+    pointerEvent(h, button, 'pointerup'); compatibilityClick(h.w, button); await h.settle();
     assert.ok(!h.ui || h.ui.host.hidden, cancel); assert.equal(h.wrapper, null, cancel);
     if (cancel === 'cleanup') { assert.equal(h.timers.size, 0); assert.equal(h.intervals.size, 0); }
   }
